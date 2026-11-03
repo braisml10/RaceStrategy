@@ -1,74 +1,72 @@
 
+"""Punto de entrada: importa archivos de tiempos y muestra las métricas.
+
+    python src/main.py                           # todos los archivos de DATA_DIR
+    python src/main.py archivo.CSV               # un archivo concreto
+    python src/main.py archivo.CSV --category HYPERCAR --car 007
+"""
+
+import argparse
 from pathlib import Path
 
-from data_import.importer import import_data, get_data_info
+import pandas as pd
 
-# Ruta raíz del proyecto
+from importer import SUPPORTED_EXTENSIONS, import_data
+from laps import format_hms, format_lap_time, list_cars, list_categories, mark_pace_laps
+from metrics import best_by_driver, pace_by_driver, session_bests
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-# Carpeta de datos de Barcelona 2026
-DATA_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "raw"
-    / "WEC"
-    / "2026"
-    / "Barcelona"
-)
-
-# Mostrar los CSV disponibles
-csv_files = list(DATA_DIR.glob("*.csv"))
-
-print(f"Carpeta de datos: {DATA_DIR}")
-print(f"CSV encontrados: {len(csv_files)}")
-
-if not csv_files:
-    raise FileNotFoundError("No se han encontrado archivos CSV.")
-
-# Importar todos los CSV encontrados
-dataframes = {}
-
-for file in csv_files:
-    print(f"\nImportando: {file.name}")
-
-    df = import_data(file)
-    dataframes[file.stem] = df
-
-    info = get_data_info(df)
-
-    print(f"Filas: {info['rows']}")
-    print(f"Columnas: {info['columns']}")
-    print(f"Nombres: {info['column_names']}")
-
-    print("\nPrimeras 5 filas:")
-    print(df.head())
-
-    print("\nValores vacíos:")
-    print(df.isna().sum())
-
-print("\nImportación completada correctamente.")
-
-print("\n")
-print("\n")
-print("\n")
-print("\n")
-print("Práctica pandas")
-
-bar_fp1 = list(dataframes.values())[0]
-print(bar_fp1.head())
+DATA_DIR = PROJECT_ROOT / "data" / "raw" / "WEC" / "2026" / "Barcelona"
 
 
-# Acceso a los DataFrames:
-print(bar_fp1.columns.tolist())
-bar_007 = bar_fp1[bar_fp1["NUMBER"] == "007"]
-print(bar_007[["NUMBER", "LAP_NUMBER", "LAP_TIME"]])
+def with_times(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Copia con las columnas indicadas (segundos) formateadas como mm:ss.ddd."""
+    df = df.copy()
+    for column in columns:
+        df[column] = df[column].map(format_lap_time)
+    return df
 
-spec_time = 0.0
-valid_laps = 0
 
-for lap in bar_007["LAP_TIME_SECONDS"]:
-    if (lap < 100):
-        spec_time = lap + spec_time
-        valid_laps += 1
+def report(path: Path, category: str | None, car: str | None) -> None:
+    print(f"\n######## {path.stem} ########")
+    df = mark_pace_laps(import_data(path))
+    print(f"{len(df)} vueltas · {df['NUMBER'].nunique()} coches")
 
-print("Tiempo medio por vuelta: ", (spec_time / valid_laps)/60)
+    for cat in [category] if category else list_categories(df):
+        data = df[df["CLASS"] == cat]
+        print(f"\n===== {cat}: {len(list_cars(df, cat))} coches =====")
+        bests = session_bests(data)
+        bests["TIME"] = bests["TIME"].map(format_lap_time)
+        bests["CLOCK"] = bests["CLOCK"].map(format_hms)
+        print(bests.drop(columns="ELAPSED").to_string(index=False))
+
+        print("\nRitmo real (10 mejores pilotos, mediana de vueltas de ritmo):")
+        pace = pace_by_driver(data).head(10)
+        print(with_times(pace, ["BEST_PACE", "MEDIAN_PACE", "MEAN_PACE"]).round(3).to_string(index=False))
+
+    if car:
+        print(f"\n===== Coche #{car} =====")
+        drivers = best_by_driver(df[df["NUMBER"] == car])
+        print(with_times(drivers, ["BEST_LAP", "BEST_S1", "BEST_S2", "BEST_S3"]).to_string(index=False))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("file", nargs="?", help="archivo CSV/Excel (por defecto, toda la carpeta de datos)")
+    parser.add_argument("--category")
+    parser.add_argument("--car")
+    args = parser.parse_args()
+
+    if args.file:
+        files = [Path(args.file)]
+    else:
+        files = sorted(p for p in DATA_DIR.glob("*") if p.suffix.lower() in SUPPORTED_EXTENSIONS)
+        if not files:
+            raise SystemExit(f"No hay archivos CSV/Excel en {DATA_DIR}")
+
+    for file in files:
+        report(file, args.category, args.car)
+
+
+if __name__ == "__main__":
+    main()
