@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState } from "react"
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react"
 import {
   api,
   formatLapTime,
@@ -8,6 +15,7 @@ import {
   timeFormatLabel,
   useApi,
   type CarData,
+  type CategoryData,
   type Metric,
   type Overview,
   type RankingRow,
@@ -234,26 +242,97 @@ function segments(points: Point[]): Point[][] {
   return out
 }
 
+// Zoom y desplazamiento vertical (solo las gráficas con `interactiveY`).
+const MIN_SPAN = 0.05 // s: zoom máximo (50 ms de rango visible)
+
+type YView = { min: number; max: number }
+type Geometry = { height: number; padTop: number; padBottom: number; full: YView; view: YView }
+
+// Mantiene la ventana dentro del rango completo y con un tamaño válido.
+function clampView(view: YView, full: YView): YView {
+  const fullSpan = full.max - full.min
+  const span = Math.min(Math.max(view.max - view.min, Math.min(MIN_SPAN, fullSpan)), fullSpan)
+  const min = Math.min(Math.max(view.min, full.min), full.max - span)
+  return { min, max: min + span }
+}
+
+// Cambia el tamaño de la ventana manteniendo `anchor` en la misma posición de pantalla.
+function zoomView(view: YView, full: YView, factor: number, anchor: number): YView {
+  const span = view.max - view.min
+  const ratio = (anchor - view.min) / span
+  const newSpan = span * factor
+  const min = anchor - ratio * newSpan
+  return clampView({ min, max: min + newSpan }, full)
+}
+
+function panView(view: YView, full: YView, delta: number): YView {
+  return clampView({ min: view.min + delta, max: view.max + delta }, full)
+}
+
+// Valor (segundos) que corresponde a una posición vertical del SVG.
+function valueAt(g: Geometry, yUnits: number): number {
+  const plotH = g.height - g.padTop - g.padBottom
+  return g.view.min + (1 - (yUnits - g.padTop) / plotH) * (g.view.max - g.view.min)
+}
+
 function LineChart({
   series,
   compact = false,
   label,
   bands = [],
+  interactiveY = false,
+  resetKey = "",
 }: {
   series: Series[]
   compact?: boolean
   label: string
   bands?: Band[]
+  interactiveY?: boolean // permite moverse y ampliar en el eje Y
+  resetKey?: string // al cambiar, vuelve a mostrarse todo el rango
 }) {
   const [hover, setHover] = useState<{ s: number; p: number } | null>(null)
+  const [yView, setYView] = useState<YView | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  const dragRef = useRef<{ startY: number; view: YView } | null>(null)
+  const geom = useRef<Geometry | null>(null)
+  const clipId = `clip-${useId().replace(/:/g, "")}`
   const all = series.flatMap((s) => s.points)
-  if (!all.length) {
+  const empty = all.length === 0
+
+  // Al cambiar la selección se vuelve a ver todo el rango.
+  useEffect(() => {
+    setYView(null)
+  }, [resetKey])
+
+  // Ctrl (o ⌘) + rueda: ampliar/reducir alrededor del puntero. Sin Ctrl la rueda
+  // sigue desplazando la página.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg || !interactiveY) return
+    const onWheel = (event: WheelEvent) => {
+      const g = geom.current
+      if (!g || !(event.ctrlKey || event.metaKey)) return
+      event.preventDefault()
+      const rect = svg.getBoundingClientRect()
+      if (!rect.height) return
+      const anchor = valueAt(g, ((event.clientY - rect.top) / rect.height) * g.height)
+      setYView(zoomView(g.view, g.full, event.deltaY < 0 ? 1 / 1.25 : 1.25, anchor))
+    }
+    svg.addEventListener("wheel", onWheel, { passive: false })
+    return () => svg.removeEventListener("wheel", onWheel)
+  }, [interactiveY, empty])
+
+  if (empty) {
+    geom.current = null
     return <p className="chart-empty">No hay vueltas que mostrar con los filtros actuales.</p>
   }
 
   const width = 620
   const height = compact ? 230 : 290
   const pad = { left: 74, right: 18, top: 14, bottom: 30 }
+  const plotW = width - pad.left - pad.right
+  const plotH = height - pad.top - pad.bottom
 
   const xs = [...all.map((p) => p.x), ...bands.flatMap((b) => [b.from - 0.5, b.to + 0.5])]
   const ys = all.map((p) => p.y)
@@ -262,16 +341,47 @@ function LineChart({
   const rawMinY = Math.min(...ys)
   const rawMaxY = Math.max(...ys)
   const margin = (rawMaxY - rawMinY || 1) * 0.08
-  const minY = rawMinY - margin
-  const maxY = rawMaxY + margin
+  const full: YView = { min: rawMinY - margin, max: rawMaxY + margin }
+  const view = interactiveY && yView ? clampView(yView, full) : full
+  const zoomed = view.max - view.min < full.max - full.min - 1e-9
+  const atMaxZoom = view.max - view.min <= MIN_SPAN + 1e-9
+  geom.current = { height, padTop: pad.top, padBottom: pad.bottom, full, view }
+  const minY = view.min
+  const maxY = view.max
 
-  const sx = (x: number) =>
-    pad.left + ((x - minX) / (maxX - minX || 1)) * (width - pad.left - pad.right)
-  const sy = (y: number) =>
-    pad.top + (1 - (y - minY) / (maxY - minY)) * (height - pad.top - pad.bottom)
+  const sx = (x: number) => pad.left + ((x - minX) / (maxX - minX || 1)) * plotW
+  const sy = (y: number) => pad.top + (1 - (y - minY) / (maxY - minY)) * plotH
+  const visible = (y: number) => y >= minY - 1e-9 && y <= maxY + 1e-9
 
   const yTicks = niceTicks(minY, maxY, 5)
   const xTicks = niceTicks(minX, maxX, 8).filter(Number.isInteger)
+
+  const zoomBy = (factor: number) =>
+    setYView(zoomView(view, full, factor, (view.min + view.max) / 2))
+  const panBy = (fraction: number) =>
+    setYView(panView(view, full, (view.max - view.min) * fraction))
+
+  // Arrastrar: la gráfica sigue al puntero.
+  const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!interactiveY || event.button !== 0) return
+    dragRef.current = { startY: event.clientY, view }
+    setDragging(true)
+    setHover(null)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (!rect.height) return
+    const dyUnits = ((event.clientY - drag.startY) / rect.height) * height
+    const delta = (dyUnits / plotH) * (drag.view.max - drag.view.min)
+    setYView(panView(drag.view, full, delta))
+  }
+  const endDrag = () => {
+    dragRef.current = null
+    setDragging(false)
+  }
 
   const hovered = hover ? series[hover.s]?.points[hover.p] : undefined
   const tooltip = hovered
@@ -282,143 +392,221 @@ function LineChart({
     : null
 
   return (
-    <div className="chart-wrap">
-      <svg
-        className="line-chart"
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label={label}
-      >
-        {bands.map((b, i) => {
-          const x1 = sx(b.from - 0.5)
-          const x2 = sx(b.to + 0.5)
-          return (
-            <g key={`band-${b.label}`}>
-              <rect
-                x={x1}
-                y={pad.top}
-                width={x2 - x1}
-                height={height - pad.top - pad.bottom}
-                fill={i % 2 === 0 ? "rgba(66,214,255,0.07)" : "rgba(157,134,255,0.07)"}
+    <>
+      {interactiveY && (
+        <div className="chart-tools" role="group" aria-label="Zoom y desplazamiento vertical">
+          <button
+            type="button"
+            onClick={() => zoomBy(1 / 1.5)}
+            disabled={atMaxZoom}
+            aria-label="Ampliar zona (zoom vertical)"
+            title="Ampliar"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomBy(1.5)}
+            disabled={!zoomed}
+            aria-label="Reducir zoom vertical"
+            title="Reducir"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={() => panBy(0.25)}
+            disabled={!zoomed}
+            aria-label="Subir: ver tiempos más lentos"
+            title="Subir"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={() => panBy(-0.25)}
+            disabled={!zoomed}
+            aria-label="Bajar: ver tiempos más rápidos"
+            title="Bajar"
+          >
+            ↓
+          </button>
+          <button type="button" onClick={() => setYView(null)} disabled={!zoomed}>
+            Ver todo
+          </button>
+          <span className="chart-tools-hint">
+            Arrastra para moverte · Ctrl + rueda para ampliar · doble clic para ver todo
+          </span>
+        </div>
+      )}
+      <div className="chart-wrap">
+        <svg
+          ref={svgRef}
+          className={`line-chart${interactiveY ? " interactive" : ""}${dragging ? " dragging" : ""}`}
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label={label}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onDoubleClick={() => setYView(null)}
+        >
+          <defs>
+            <clipPath id={clipId}>
+              <rect x={pad.left} y={pad.top} width={plotW} height={plotH} />
+            </clipPath>
+          </defs>
+          {bands.map((b, i) => {
+            const x1 = sx(b.from - 0.5)
+            const x2 = sx(b.to + 0.5)
+            return (
+              <g key={`band-${b.label}`}>
+                <rect
+                  x={x1}
+                  y={pad.top}
+                  width={x2 - x1}
+                  height={plotH}
+                  fill={i % 2 === 0 ? "rgba(66,214,255,0.07)" : "rgba(157,134,255,0.07)"}
+                />
+                <text
+                  x={(x1 + x2) / 2}
+                  y={pad.top + 13}
+                  textAnchor="middle"
+                  fill="#9fb0c2"
+                  fontSize="11"
+                >
+                  {x2 - x1 < 54 ? b.short : b.label}
+                </text>
+              </g>
+            )
+          })}
+          {yTicks.map((t) => (
+            <g key={`y${t}`}>
+              <line
+                x1={pad.left}
+                x2={width - pad.right}
+                y1={sy(t)}
+                y2={sy(t)}
+                stroke="#203044"
+                strokeWidth="1"
               />
               <text
-                x={(x1 + x2) / 2}
-                y={pad.top + 13}
-                textAnchor="middle"
-                fill="#9fb0c2"
+                x={pad.left - 8}
+                y={sy(t) + 4}
+                textAnchor="end"
+                fill="#8da0b4"
                 fontSize="11"
               >
-                {x2 - x1 < 54 ? b.short : b.label}
+                {formatLapTime(t)}
               </text>
             </g>
-          )
-        })}
-        {yTicks.map((t) => (
-          <g key={`y${t}`}>
-            <line
-              x1={pad.left}
-              x2={width - pad.right}
-              y1={sy(t)}
-              y2={sy(t)}
-              stroke="#203044"
-              strokeWidth="1"
-            />
+          ))}
+          {xTicks.map((t) => (
             <text
-              x={pad.left - 8}
-              y={sy(t) + 4}
-              textAnchor="end"
+              key={`x${t}`}
+              x={sx(t)}
+              y={height - 8}
+              textAnchor="middle"
               fill="#8da0b4"
               fontSize="11"
             >
-              {formatLapTime(t)}
+              {t}
             </text>
-          </g>
-        ))}
-        {xTicks.map((t) => (
-          <text
-            key={`x${t}`}
-            x={sx(t)}
-            y={height - 8}
-            textAnchor="middle"
-            fill="#8da0b4"
-            fontSize="11"
-          >
-            {t}
+          ))}
+          <text x={width - pad.right} y={height - 8} textAnchor="end" fill="#62758a" fontSize="10">
+            vuelta
           </text>
-        ))}
-        <text x={width - pad.right} y={height - 8} textAnchor="end" fill="#62758a" fontSize="10">
-          vuelta
-        </text>
 
-        {series.map(
-          (s) =>
-            s.line &&
-            (s.dashed ? [[...s.points].sort((a, b) => a.x - b.x)] : segments(s.points))
-              .filter((seg) => seg.length > 1)
-              .map((seg, i) => (
-                <polyline
-                  key={`${s.id}-line-${i}`}
-                  points={seg.map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ")}
-                  fill="none"
-                  stroke={s.color}
-                  strokeWidth={s.dashed ? 1.6 : 2}
-                  strokeDasharray={s.dashed ? "6 4" : undefined}
-                  strokeOpacity={s.dashed ? 0.95 : 0.75}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )),
+          <g clipPath={interactiveY ? `url(#${clipId})` : undefined}>
+            {series.map(
+              (s) =>
+                s.line &&
+                (s.dashed ? [[...s.points].sort((a, b) => a.x - b.x)] : segments(s.points))
+                  .filter((seg) => seg.length > 1)
+                  .map((seg, i) => (
+                    <polyline
+                      key={`${s.id}-line-${i}`}
+                      points={seg.map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ")}
+                      fill="none"
+                      stroke={s.color}
+                      strokeWidth={s.dashed ? 1.6 : 2}
+                      strokeDasharray={s.dashed ? "6 4" : undefined}
+                      strokeOpacity={s.dashed ? 0.95 : 0.75}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  )),
+            )}
+
+            {series.map((s, si) =>
+              s.markers === false
+                ? null
+                : s.points.map((p, pi) => {
+                    if (!visible(p.y)) return null
+                    const isHover = hover?.s === si && hover.p === pi
+                    return (
+                      <g key={`${s.id}-${p.x}`}>
+                        {p.best && (
+                          <circle
+                            cx={sx(p.x)}
+                            cy={sy(p.y)}
+                            r={8.5}
+                            fill="none"
+                            stroke="#FFFFFF"
+                            strokeWidth="1.6"
+                          />
+                        )}
+                        <Marker
+                          shape={s.shape}
+                          x={sx(p.x)}
+                          y={sy(p.y)}
+                          r={isHover ? 5.4 : 3.6}
+                          color={s.color}
+                        />
+                        <circle
+                          cx={sx(p.x)}
+                          cy={sy(p.y)}
+                          r={9}
+                          fill="transparent"
+                          onMouseEnter={() => setHover({ s: si, p: pi })}
+                          onMouseLeave={() => setHover(null)}
+                        />
+                      </g>
+                    )
+                  }),
+            )}
+          </g>
+
+          {interactiveY && zoomed && (
+            <g aria-hidden="true">
+              <rect x={width - 11} y={pad.top} width={5} height={plotH} rx={2.5} fill="#182536" />
+              <rect
+                x={width - 11}
+                y={pad.top + (1 - (view.max - full.min) / (full.max - full.min)) * plotH}
+                width={5}
+                height={((view.max - view.min) / (full.max - full.min)) * plotH}
+                rx={2.5}
+                fill="#4b6a8c"
+              />
+            </g>
+          )}
+        </svg>
+
+        {hovered && tooltip && (
+          <div
+            className={`chart-tooltip ${tooltip.top < 30 ? "below" : ""}`}
+            style={{ left: `${tooltip.left}%`, top: `${tooltip.top}%` }}
+          >
+            <b>Vuelta {hovered.x}</b>
+            <strong>{formatLapTime(hovered.y)}</strong>
+            <span>{hovered.who}</span>
+            {hovered.best && <em>Mejor vuelta de la serie</em>}
+            {hovered.note && <em>{hovered.note}</em>}
+          </div>
         )}
-
-        {series.map((s, si) =>
-          s.markers === false ? null : s.points.map((p, pi) => {
-            const isHover = hover?.s === si && hover.p === pi
-            return (
-              <g key={`${s.id}-${p.x}`}>
-                {p.best && (
-                  <circle
-                    cx={sx(p.x)}
-                    cy={sy(p.y)}
-                    r={8.5}
-                    fill="none"
-                    stroke="#FFFFFF"
-                    strokeWidth="1.6"
-                  />
-                )}
-                <Marker
-                  shape={s.shape}
-                  x={sx(p.x)}
-                  y={sy(p.y)}
-                  r={isHover ? 5.4 : 3.6}
-                  color={s.color}
-                />
-                <circle
-                  cx={sx(p.x)}
-                  cy={sy(p.y)}
-                  r={9}
-                  fill="transparent"
-                  onMouseEnter={() => setHover({ s: si, p: pi })}
-                  onMouseLeave={() => setHover(null)}
-                />
-              </g>
-            )
-          }),
-        )}
-      </svg>
-
-      {hovered && tooltip && (
-        <div
-          className={`chart-tooltip ${tooltip.top < 30 ? "below" : ""}`}
-          style={{ left: `${tooltip.left}%`, top: `${tooltip.top}%` }}
-        >
-          <b>Vuelta {hovered.x}</b>
-          <strong>{formatLapTime(hovered.y)}</strong>
-          <span>{hovered.who}</span>
-          {hovered.best && <em>Mejor vuelta de la serie</em>}
-          {hovered.note && <em>{hovered.note}</em>}
-        </div>
-      )}
-    </div>
+      </div>
+    </>
   )
 }
 
@@ -481,6 +669,32 @@ function driverSeries(data: CarData, mode: Mode): Series[] {
     })),
     ...excludedSeries(data, mode),
   ]
+}
+
+// Coches marcados en la clasificación para comparar su ritmo (máx. 4). Cada uno
+// conserva su color y su forma (`slot`) mientras siga seleccionado.
+type Selection = { car: string; slot: number }
+const MAX_COMPARE = 4
+
+function paceSeries(data: CategoryData, picks: Selection[]): Series[] {
+  return picks.flatMap(({ car, slot }) => {
+    const item = data.pace.find((p) => p.car === car)
+    if (!item) return []
+    return [
+      {
+        id: car,
+        label: `#${car} ${item.team}`,
+        color: PALETTE[slot % PALETTE.length],
+        shape: SHAPES[slot % SHAPES.length],
+        line: true,
+        points: markBest(
+          item.laps.flatMap((l) =>
+            l.seconds === null ? [] : [{ x: l.lap, y: l.seconds, who: l.driver }],
+          ),
+        ),
+      },
+    ]
+  })
 }
 
 function csvCell(value: string | number): string {
@@ -907,6 +1121,7 @@ function Dashboard({
   const [metric, setMetric] = useState<Metric>("lap")
   const [mode, setMode] = useState<Mode>("ritmo")
   const [selectedCar, setSelectedCar] = useState<string | null>(null)
+  const [compare, setCompare] = useState<Selection[]>([])
 
   const cat = useApi(() => api.category(sessionId, category, slow), [sessionId, category, slow])
   const car = useApi(
@@ -925,21 +1140,18 @@ function Dashboard({
     )
   }, [cat.data])
 
-  const topSeries = useMemo<Series[]>(
-    () =>
-      (cat.data?.topCars ?? []).map((c, i) => ({
-        id: c.car,
-        label: `#${c.car} ${c.team}`,
-        color: PALETTE[i % PALETTE.length],
-        shape: SHAPES[i % SHAPES.length],
-        line: true,
-        points: markBest(
-          c.laps.flatMap((l) =>
-            l.seconds === null ? [] : [{ x: l.lap, y: l.seconds, who: l.driver }],
-          ),
-        ),
-      })),
-    [cat.data],
+  // Por defecto se comparan los más rápidos; si cambian de categoría, se vuelve a ese valor.
+  const activeCompare = useMemo<Selection[]>(() => {
+    const data = cat.data
+    if (!data) return []
+    const valid = compare.filter((c) => data.cars.some((x) => x.number === c.car))
+    return valid.length
+      ? valid
+      : data.rankings.lap.slice(0, MAX_COMPARE).map((r, slot) => ({ car: r.car, slot }))
+  }, [cat.data, compare])
+  const paceChartSeries = useMemo<Series[]>(
+    () => (cat.data ? paceSeries(cat.data, activeCompare) : []),
+    [cat.data, activeCompare],
   )
   const singleSeries = useMemo(() => (car.data ? carSeries(car.data, mode) : []), [car.data, mode])
   const compareSeries = useMemo(
@@ -972,7 +1184,20 @@ function Dashboard({
 
   function changeCategory(next: string) {
     setSelectedCar(null)
+    setCompare([])
     onCategory(next)
+  }
+
+  function toggleCar(car: string) {
+    const existing = activeCompare.find((c) => c.car === car)
+    if (existing) {
+      if (activeCompare.length > 1) setCompare(activeCompare.filter((c) => c.car !== car))
+      return
+    }
+    if (activeCompare.length >= MAX_COMPARE) return
+    const used = new Set(activeCompare.map((c) => c.slot))
+    const slot = Array.from({ length: MAX_COMPARE }, (_, i) => i).find((i) => !used.has(i)) ?? 0
+    setCompare([...activeCompare, { car, slot }])
   }
 
   const drivers = car.data?.drivers ?? []
@@ -1088,14 +1313,19 @@ function Dashboard({
             <div className="panel-heading">
               <div>
                 <h2>Evolución del ritmo</h2>
-                <p>Los {data.topCars.length} coches más rápidos · vueltas de ritmo</p>
+                <p aria-live="polite">
+                  {activeCompare.length} de {MAX_COMPARE} coches · vueltas de ritmo · elige los
+                  coches en la clasificación
+                </p>
               </div>
               <span className="panel-unit">TIEMPO / VUELTA</span>
             </div>
-            <Legend series={topSeries} />
+            <Legend series={paceChartSeries} />
             <LineChart
-              series={topSeries}
-              label="Tiempo por vuelta de los coches más rápidos de la categoría"
+              series={paceChartSeries}
+              interactiveY
+              resetKey={`${category}|${activeCompare.map((c) => c.car).join(",")}`}
+              label="Tiempo por vuelta de los coches seleccionados de la categoría"
             />
           </article>
 
@@ -1103,24 +1333,64 @@ function Dashboard({
             <div className="panel-heading">
               <div>
                 <h2>Clasificación por {metric === "lap" ? "ritmo" : "sector"}</h2>
-                <p>{metricTitle}</p>
+                <p>{metricTitle} · marca hasta {MAX_COMPARE} coches para comparar</p>
               </div>
               <span className="panel-unit">{ranking.length} COCHES</span>
             </div>
             <ol className="ranking-list" tabIndex={0} aria-label={`Clasificación: ${metricTitle}`}>
-              {ranking.map((row, index) => (
-                <li key={row.car} className={index === 0 ? "leader" : ""}>
-                  <span className="rank">{String(row.position).padStart(2, "0")}</span>
-                  <span className="team">
-                    #{row.car} {row.team}
-                    <small>
-                      {row.driver} · vuelta {row.lap}
-                    </small>
-                  </span>
-                  <strong>{row.text}</strong>
-                  <small className="delta">{row.gapText}</small>
-                </li>
-              ))}
+              {ranking.map((row, index) => {
+                const pick = activeCompare.find((c) => c.car === row.car)
+                const atMax = !pick && activeCompare.length >= MAX_COMPARE
+                const onlyOne = !!pick && activeCompare.length === 1
+                return (
+                  <li
+                    key={row.car}
+                    className={`${index === 0 ? "leader" : ""} ${pick ? "selected" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="compare-check"
+                      checked={!!pick}
+                      disabled={atMax || onlyOne}
+                      title={
+                        atMax
+                          ? `Máximo ${MAX_COMPARE} coches`
+                          : onlyOne
+                            ? "Debe quedar al menos un coche"
+                            : undefined
+                      }
+                      onChange={() => toggleCar(row.car)}
+                      aria-label={`Comparar el ritmo del coche #${row.car} ${row.team}`}
+                    />
+                    <span className="rank">{String(row.position).padStart(2, "0")}</span>
+                    <span className="team">
+                      {pick && (
+                        <svg
+                          className="team-swatch"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          aria-hidden="true"
+                        >
+                          <Marker
+                            shape={SHAPES[pick.slot % SHAPES.length]}
+                            x={6}
+                            y={6}
+                            r={3.4}
+                            color={PALETTE[pick.slot % PALETTE.length]}
+                          />
+                        </svg>
+                      )}
+                      #{row.car} {row.team}
+                      <small>
+                        {row.driver} · vuelta {row.lap}
+                      </small>
+                    </span>
+                    <strong>{row.text}</strong>
+                    <small className="delta">{row.gapText}</small>
+                  </li>
+                )
+              })}
             </ol>
           </article>
         </section>

@@ -36,7 +36,6 @@ REQUIRED_COLUMNS = [
     "DRIVER_NAME", "CLASS", "TEAM", "HOUR", "ELAPSED",
 ]
 DEFAULT_SLOW_PCT = round(SLOW_LAP_THRESHOLD * 100)
-TOP_CARS = 4
 TREND_MIN_LAPS = 3  # vueltas de ritmo mínimas para dibujar la tendencia de un stint
 
 app = FastAPI(title="WEC Strategy API")
@@ -220,14 +219,13 @@ def category_view(
     session: str, category: str, slow: int = Query(DEFAULT_SLOW_PCT, ge=100, le=200)
 ) -> dict:
     """Todo lo que muestra el panel de una categoría: mejores tiempos, clasificación
-    por vuelta y sector, ritmo de los coches más rápidos y lista de coches."""
+    por vuelta y sector, ritmo por vuelta de cada coche (del más rápido al más lento) y lista de coches."""
     df = _session_data(session, slow)
     data = df[df["CLASS"] == category]
     if data.empty:
         raise HTTPException(404, f"No existe la categoría «{category}» en esta sesión.")
 
     rankings = {key: ranking_by_metric(data, column) for key, column in METRIC_COLUMNS.items()}
-    top = rankings["lap"].head(TOP_CARS)
     cars = list_cars(df, category)
 
     return {
@@ -240,9 +238,9 @@ def category_view(
         },
         "bests": [_best(row) for row in session_bests(data).itertuples()],
         "rankings": {key: _ranking(ranking) for key, ranking in rankings.items()},
-        "topCars": [
+        "pace": [
             {"car": r.CAR, "team": _text(r.TEAM), "laps": _pace_points(data, r.CAR)}
-            for r in top.itertuples()
+            for r in rankings["lap"].itertuples()
         ],
         "cars": [
             {

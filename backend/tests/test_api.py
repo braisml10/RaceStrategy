@@ -43,8 +43,8 @@ def test_category(client):
     assert [r["car"] for r in ranking] == ["7", "007"]
     assert ranking[0]["gapText"] == "—" and ranking[1]["gapText"] == "+1.000"
     assert set(body["rankings"]) == {"lap", "s1", "s2", "s3"}
-    assert [c["car"] for c in body["topCars"]] == ["7", "007"]
-    only_pace = [p["lap"] for p in body["topCars"][1]["laps"]]
+    assert [c["car"] for c in body["pace"]] == ["7", "007"]       # todos los coches, más rápido primero
+    only_pace = [p["lap"] for p in body["pace"][1]["laps"]]
     assert only_pace == [2, 3, 6]                       # solo vueltas de ritmo
     assert [c["number"] for c in body["cars"]] == ["007", "7"]
 

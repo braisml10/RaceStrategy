@@ -57,7 +57,7 @@ export type RankingRow = TimeValue & {
   lap: number
   clock: string
 }
-export type TopCar = {
+export type CarPace = {
   car: string
   team: string
   laps: { lap: number; seconds: number | null; driver: string }[]
@@ -73,7 +73,7 @@ export type CategoryData = {
   counts: { laps: number; paceLaps: number; cars: number; drivers: number }
   bests: Best[]
   rankings: Record<Metric, RankingRow[]>
-  topCars: TopCar[]
+  pace: CarPace[]
   cars: CarOption[]
 }
 
