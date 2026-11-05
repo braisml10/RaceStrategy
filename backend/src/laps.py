@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 
@@ -52,7 +54,8 @@ def list_categories(df: pd.DataFrame) -> list[str]:
 
 
 def _car_sort_key(number: str) -> tuple[int, str]:
-    return (int(number) if str(number).isdigit() else 10**6, str(number))
+    digits = re.match(r"\d+", str(number))   # "7 (Toyota)" se ordena como 7
+    return (int(digits.group()) if digits else 10**6, str(number))
 
 
 def list_cars(df: pd.DataFrame, category: str | None = None) -> pd.DataFrame:
@@ -142,7 +145,7 @@ def lap_series(car_df: pd.DataFrame, pace_only: bool = False) -> pd.DataFrame:
     if pace_only:
         laps = laps[laps["IS_PACE_LAP"]]
 
-    return pd.DataFrame(
+    series = pd.DataFrame(
         {
             "LAP_NUMBER": laps["LAP_NUMBER"].astype(int),
             "DRIVER_NAME": laps["DRIVER_NAME"],
@@ -156,3 +159,7 @@ def lap_series(car_df: pd.DataFrame, pace_only: bool = False) -> pd.DataFrame:
             "IS_PACE_LAP": laps["IS_PACE_LAP"],
         }
     ).reset_index(drop=True)
+    if "STINT" in laps.columns:  # tras mark_stints
+        series["STINT"] = laps["STINT"].astype(int).to_numpy()
+        series["STINT_LAP"] = laps["STINT_LAP"].astype(int).to_numpy()
+    return series

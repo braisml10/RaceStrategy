@@ -216,3 +216,49 @@ def get_data_info(df: pd.DataFrame) -> dict:
         "missing_values": df.isna().sum().to_dict(),
         "data_types": df.dtypes.astype(str).to_dict(),
     }
+
+
+def separate_shared_numbers(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Separa coches de equipos distintos que comparten número y detecta duplicados.
+
+    Pasa, por ejemplo, cuando un CSV se guarda con Excel: "007" (Aston Martin)
+    se convierte en 7 y se confunde con el 7 de Toyota. Cada coche afectado pasa
+    a llamarse "7 (Aston Martin)" / "7 (Toyota)": nunca se adivina cuál era el
+    "007". Devuelve (datos, avisos para mostrar al usuario).
+
+    Si tras separar siguen repetidas las vueltas de un mismo coche, el archivo
+    trae filas duplicadas y se lanza ValueError.
+    """
+    notices: list[str] = []
+    if {"NUMBER", "TEAM"} <= set(df.columns):
+        df = df.copy()
+        for number in df["NUMBER"].dropna().unique().tolist():
+            rows = df["NUMBER"] == number
+            teams = df.loc[rows, "TEAM"].fillna("").unique().tolist()
+            if len(teams) < 2:
+                continue
+            column = "TEAM"
+            if "MANUFACTURER" in df.columns:
+                makers = df.loc[rows, "MANUFACTURER"].fillna("")
+                if makers.nunique() == len(teams):
+                    column = "MANUFACTURER"
+            labels = df[column].fillna("")
+            new_names = []
+            for label in labels[rows].unique().tolist():
+                name = f"{number} ({label})"
+                df.loc[rows & (labels == label), "NUMBER"] = name
+                new_names.append(name)
+            notices.append(
+                f"En el archivo el número {number} corresponde a coches de equipos distintos "
+                f"({', '.join(t for t in teams if t)}). Suele pasar al guardar el CSV con Excel, "
+                f"que borra los ceros de «007». Se han separado por equipo: {'; '.join(new_names)}."
+            )
+
+    repeated = df[df.duplicated(["NUMBER", "LAP_NUMBER"], keep=False)]
+    if not repeated.empty:
+        cars = sorted(repeated["NUMBER"].unique())
+        raise ValueError(
+            f"hay vueltas repetidas en los coches {cars}: el archivo trae filas duplicadas "
+            "para un mismo coche y equipo."
+        )
+    return df, notices

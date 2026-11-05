@@ -20,7 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import (
     CATEGORY_LABELS, CORS_ORIGINS, DATA_DIR, MS_SEPARATOR, SLOW_LAP_THRESHOLD,
 )
-from importer import SUPPORTED_EXTENSIONS, import_data
+from degradation import stint_degradation
+from importer import SUPPORTED_EXTENSIONS, import_data, separate_shared_numbers
 from laps import (
     format_gap, format_hms, format_lap_time, lap_series, list_cars, list_categories,
     mark_pace_laps,
@@ -28,6 +29,7 @@ from laps import (
 from metrics import (
     METRIC_COLUMNS, driver_summary, ranking_by_metric, session_bests,
 )
+from stints import mark_stints, stint_summary
 
 REQUIRED_COLUMNS = [
     "NUMBER", "LAP_NUMBER", "LAP_TIME", "S1", "S2", "S3",
@@ -35,6 +37,7 @@ REQUIRED_COLUMNS = [
 ]
 DEFAULT_SLOW_PCT = round(SLOW_LAP_THRESHOLD * 100)
 TOP_CARS = 4
+TREND_MIN_LAPS = 3  # vueltas de ritmo mínimas para dibujar la tendencia de un stint
 
 app = FastAPI(title="WEC Strategy API")
 app.add_middleware(
@@ -54,14 +57,16 @@ def _session_files() -> dict[str, Path]:
 
 
 @lru_cache(maxsize=8)
-def _load(path: str, modified: float) -> pd.DataFrame:
-    """`modified` solo invalida la caché cuando el archivo cambia."""
-    return import_data(path, required_columns=REQUIRED_COLUMNS)
+def _load(path: str, modified: float) -> tuple[pd.DataFrame, list[str]]:
+    """Datos de la sesión y avisos para el usuario. `modified` solo invalida la
+    caché cuando el archivo cambia."""
+    df = import_data(path, required_columns=REQUIRED_COLUMNS)
+    return separate_shared_numbers(df)
 
 
 @lru_cache(maxsize=32)
 def _marked(path: str, modified: float, slow_pct: int) -> pd.DataFrame:
-    return mark_pace_laps(_load(path, modified), slow_pct / 100)
+    return mark_pace_laps(_load(path, modified)[0], slow_pct / 100)
 
 
 def _session_data(session: str, slow_pct: int = DEFAULT_SLOW_PCT) -> pd.DataFrame:
@@ -73,6 +78,11 @@ def _session_data(session: str, slow_pct: int = DEFAULT_SLOW_PCT) -> pd.DataFram
         return _marked(str(path), path.stat().st_mtime, slow_pct)
     except Exception as error:  # mensaje legible para la interfaz
         raise HTTPException(422, f"No se pudo importar {session}: {error}") from error
+
+
+def _session_notices(session: str) -> list[str]:
+    path = _session_files()[session]  # _session_data ya comprobó que existe
+    return _load(str(path), path.stat().st_mtime)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +98,12 @@ def _text(value) -> str:
 
 def _time(seconds) -> dict:
     return {"seconds": _num(seconds), "text": format_lap_time(seconds)}
+
+
+def _median_gap_text(gap) -> str:
+    if gap is None or pd.isna(gap):
+        return "Sin vueltas de ritmo"
+    return "Referencia" if gap == 0 else f"{format_gap(gap)} s"
 
 
 def _best(row) -> dict:
@@ -118,6 +134,35 @@ def _ranking(ranking: pd.DataFrame) -> list[dict]:
         }
         for r in ranking.itertuples()
     ]
+
+
+def _stints(car: pd.DataFrame) -> list[dict]:
+    """Stints del coche con su tendencia de ritmo (None si hay pocas vueltas)."""
+    trends = stint_degradation(car, min_laps=TREND_MIN_LAPS).set_index("STINT")
+    stints = []
+    for r in stint_summary(car).itertuples():
+        trend = None
+        if r.STINT in trends.index:
+            fit = trends.loc[r.STINT]
+            trend = {
+                "slope": float(fit["NET_SLOPE"]),
+                "intercept": float(fit["INTERCEPT"]),
+                "r2": _num(fit["R2"]),
+            }
+        stints.append(
+            {
+                "stint": int(r.STINT),
+                "driver": r.DRIVER_NAME,
+                "startLap": int(r.START_LAP),
+                "endLap": int(r.END_LAP),
+                "laps": int(r.LAPS),
+                "paceLaps": int(r.PACE_LAPS),
+                "best": _time(r.BEST_LAP),
+                "median": _time(r.MEDIAN_PACE),
+                "trend": trend,
+            }
+        )
+    return stints
 
 
 def _pace_points(df: pd.DataFrame, car: str) -> list[dict]:
@@ -160,6 +205,7 @@ def overview(session: str) -> dict:
         )
     return {
         "session": {"id": session, "name": Path(session).stem},
+        "notices": _session_notices(session),
         "laps": len(df),
         "cars": int(df["NUMBER"].nunique()),
         "drivers": int(df["DRIVER_NAME"].nunique()),
@@ -219,6 +265,7 @@ def car_view(
     car = df[df["NUMBER"] == number]
     if car.empty:
         raise HTTPException(404, f"No existe el coche «{number}» en esta sesión.")
+    car = mark_stints(car)
 
     drivers = driver_summary(car)
     fastest = drivers["BEST_LAP"].min()
@@ -242,6 +289,7 @@ def car_view(
                 "s2": _time(r.BEST_S2),
                 "s3": _time(r.BEST_S3),
                 "median": _time(r.MEDIAN_PACE),
+                "medianGap": {"seconds": _num(r.MEDIAN_GAP), "text": _median_gap_text(r.MEDIAN_GAP)},
                 "deltaText": (
                     "Referencia"
                     if r.BEST_LAP == fastest
@@ -250,9 +298,12 @@ def car_view(
             }
             for r in drivers.itertuples()
         ],
+        "stints": _stints(car),
         "laps": [
             {
                 "lap": int(r.LAP_NUMBER),
+                "stint": int(r.STINT),
+                "stintLap": int(r.STINT_LAP),
                 "driver": r.DRIVER_NAME,
                 **_time(r.LAP_TIME_SECONDS),
                 "s1": r.S1_TEXT,

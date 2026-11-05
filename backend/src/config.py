@@ -34,3 +34,6 @@ CATEGORY_LABELS = {"HYPERCAR": "Hypercar", "LMP2": "LMP2", "LMGT3": "LMGT3"}
 CORS_ORIGINS = os.environ.get(
     "WEC_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
 ).split(",")
+
+# Mínimo de vueltas de ritmo en un stint para ajustar su tendencia (degradación).
+MIN_PACE_LAPS_FOR_DEGRADATION = 5
