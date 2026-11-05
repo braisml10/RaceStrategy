@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api
-from helpers import SESSION_ROWS, write_session
+from helpers import SESSION_ROWS, STINT_CAR, car_rows, write_session
 
 
 @pytest.fixture()
@@ -30,6 +30,7 @@ def test_overview(client):
     assert hyper["label"] == "Hypercar" and hyper["cars"] == 2
     assert hyper["bestLap"]["text"] == "01:33.000" and hyper["bestLap"]["car"] == "7"
     assert body["clockStart"] == "11:32:00"
+    assert body["notices"] == []
 
 
 def test_category(client):
@@ -62,9 +63,55 @@ def test_car(client):
     assert ana["name"] == "Ana A" and ana["best"]["text"] == "01:34.000"
     assert ana["deltaText"] == "Referencia" and ben["deltaText"] == "+0.500 s"
     assert ana["s1"]["text"] == "00:29.500"
+    # misma mediana de ritmo (94.5) en los dos pilotos: ambos son referencia
+    assert ana["medianGap"] == {"seconds": 0.0, "text": "Referencia"}
+    assert ben["medianGap"] == {"seconds": 0.0, "text": "Referencia"}
     assert len(body["laps"]) == 8
     lap5 = body["laps"][4]
     assert lap5["status"] == "Salida de boxes" and not lap5["isPace"] and lap5["text"] == "03:00.000"
+
+
+def test_car_stints_and_trend(client, tmp_path):
+    body = client.get("/api/sessions/FP1.csv/cars/007").json()
+    assert [(s["stint"], s["driver"], s["startLap"], s["endLap"]) for s in body["stints"]] == [
+        (1, "Ana A", 1, 4), (2, "Ben B", 5, 8),
+    ]
+    assert all(s["trend"] is None for s in body["stints"])          # < 3 vueltas de ritmo
+    assert [(l["lap"], l["stint"], l["stintLap"]) for l in body["laps"][3:6]] == [
+        (4, 1, 4), (5, 2, 1), (6, 2, 2),
+    ]
+
+    # coche sintético con stints de pendiente conocida (0,1 / 0,2 / 0,1 s por vuelta)
+    write_session(tmp_path / "STINT.csv", car_rows("5", STINT_CAR))
+    stints = client.get("/api/sessions/STINT.csv/cars/5").json()["stints"]
+    assert [s["trend"]["slope"] for s in stints] == pytest.approx([0.1, 0.2, 0.1])
+    assert [s["trend"]["intercept"] for s in stints] == pytest.approx([94.8, 93.6, 93.8])
+    assert [s["paceLaps"] for s in stints] == [4, 4, 3]
+    assert stints[1]["median"]["text"] == "01:34.300"
+
+
+def test_shared_number_is_separated_not_rejected(client, tmp_path):
+    # El mismo FP1 pero "guardado con Excel": 007 -> 7, igual que el Toyota
+    lost = [r.replace("007;", "7;", 1) if r.startswith("007;") else r for r in SESSION_ROWS]
+    write_session(tmp_path / "LOST.csv", lost)
+
+    overview = client.get("/api/sessions/LOST.csv/overview")
+    assert overview.status_code == 200
+    body = overview.json()
+    assert body["cars"] == 3 and len(body["notices"]) == 1 and "Excel" in body["notices"][0]
+
+    cat = client.get("/api/sessions/LOST.csv/categories/HYPERCAR").json()
+    assert [c["number"] for c in cat["cars"]] == ["7 (Aston)", "7 (Toyota)"]
+    car = client.get("/api/sessions/LOST.csv/cars/7%20(Aston)").json()
+    assert len(car["laps"]) == 8 and [d["name"] for d in car["drivers"]] == ["Ana A", "Ben B"]
+
+
+def test_repeated_laps_are_reported(client, tmp_path):
+    # Una vuelta repetida (como pasa si el #007 y el #7 se leen como el mismo coche)
+    write_session(tmp_path / "DUP.csv", SESSION_ROWS + [SESSION_ROWS[9]])
+    reply = client.get("/api/sessions/DUP.csv/overview")
+    assert reply.status_code == 422
+    assert "vueltas repetidas" in reply.json()["detail"]
 
 
 def test_errors(client):

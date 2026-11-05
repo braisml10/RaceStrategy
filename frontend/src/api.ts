@@ -39,6 +39,7 @@ export type CategorySummary = {
 }
 export type Overview = {
   session: SessionInfo
+  notices: string[]
   laps: number
   cars: number
   drivers: number
@@ -85,10 +86,13 @@ export type DriverRow = {
   s2: TimeValue
   s3: TimeValue
   median: TimeValue
+  medianGap: TimeValue
   deltaText: string
 }
 export type CarLap = TimeValue & {
   lap: number
+  stint: number
+  stintLap: number
   driver: string
   s1: string
   s2: string
@@ -97,10 +101,23 @@ export type CarLap = TimeValue & {
   status: string
   isPace: boolean
 }
+export type StintRow = {
+  stint: number
+  driver: string
+  startLap: number
+  endLap: number
+  laps: number
+  paceLaps: number
+  best: TimeValue
+  median: TimeValue
+  // tiempo ≈ intercept + slope × (vuelta del stint); null si hay pocas vueltas de ritmo
+  trend: { slope: number; intercept: number; r2: number | null } | null
+}
 export type CarData = {
   car: { number: string; team: string; manufacturer: string; category: string }
   counts: { laps: number; paceLaps: number }
   drivers: DriverRow[]
+  stints: StintRow[]
   laps: CarLap[]
 }
 
@@ -120,6 +137,19 @@ export function formatLapTime(seconds: number | null | undefined): string {
   const minutes = Math.floor(totalMs / 60000)
   const rest = ((totalMs % 60000) / 1000).toFixed(3).padStart(6, "0")
   return `${String(minutes).padStart(2, "0")}:${rest.replace(".", msSeparator)}`
+}
+
+export function formatSeconds(seconds: number): string {
+  return seconds.toFixed(3).replace(".", msSeparator)
+}
+
+export function formatSigned(seconds: number): string {
+  const sign = seconds >= 0 ? "+" : "-"
+  return `${sign}${Math.abs(seconds).toFixed(3).replace(".", msSeparator)}`
+}
+
+export function timeFormatLabel(): string {
+  return `mm:ss${msSeparator}ddd`
 }
 
 // ---------------------------------------------------------------------------

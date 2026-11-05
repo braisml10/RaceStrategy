@@ -779,54 +779,171 @@ footer {
   footer span:last-child { display: none; }
 }
 
-.backend-app { min-height: 100vh; background: #070b10; color: #e7edf5; }
-.backend-header { height: 64px; padding: 0 5vw; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1b2938; background: #090e14; }
-.backend-brand { display: flex; align-items: center; gap: 10px; color: #e7edf5; text-decoration: none; font-weight: 700; letter-spacing: .08em; }
-.backend-mark { display: grid; place-items: center; width: 30px; height: 30px; color: #42d6ff; border: 1px solid #2f80ff; }
-.backend-session, .backend-car-select { display: flex; align-items: center; gap: 10px; color: #8494a6; }
-.backend-session select, .backend-car-select { padding: 9px 12px; color: #dce6f1; background: #101923; border: 1px solid #243346; border-radius: 4px; }
-.backend-main { width: min(1200px, calc(100% - 36px)); margin: auto; padding: 36px 0 64px; }
-.backend-heading, .backend-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.backend-heading h1 { margin: 4px 0 24px; font-size: clamp(28px, 4vw, 42px); }
-.backend-eyebrow { color: #42d6ff; font: 700 10px monospace; letter-spacing: .14em; }
-.backend-summary, .backend-panel p { color: #8494a6; }
-.backend-tabs, .backend-metric-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
-.backend-tabs { margin-bottom: 18px; }
-.backend-tabs button, .backend-metric-tabs button { padding: 9px 13px; color: #9aabbd; background: #0e1721; border: 1px solid #243346; cursor: pointer; }
-.backend-tabs button.active, .backend-metric-tabs button.active { color: #42d6ff; border-color: #2f80ff; background: #12233a; }
-.backend-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 18px 0; }
-.backend-stat, .backend-panel { padding: 18px; background: #0d141d; border: 1px solid #1b2938; border-radius: 6px; }
-.backend-stat span, .backend-stat strong { display: block; }
-.backend-stat span { color: #8494a6; font-size: 12px; }
-.backend-stat strong { margin-top: 10px; font: 20px monospace; }
-.backend-panel { margin-top: 14px; }
-.backend-panel h2 { margin: 0; font-size: 18px; }
-.backend-panel-heading { margin-bottom: 16px; }
-.backend-panel-heading p { margin: 5px 0 0; font-size: 12px; }
-.backend-table-wrap { overflow-x: auto; }
-.backend-table-wrap table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; }
-.backend-table-wrap th, .backend-table-wrap td { padding: 11px 10px; border-bottom: 1px solid #1b2938; }
-.backend-table-wrap th { color: #71849a; font-size: 11px; }
-.backend-table-wrap td { font-size: 13px; }
-.backend-chart-row { display: grid; grid-template-columns: 55px minmax(120px, 1fr) minmax(100px, 2fr) 90px; align-items: center; gap: 12px; min-height: 48px; border-bottom: 1px solid #1b2938; }
-.backend-chart-row > span, .backend-chart-row small { color: #8494a6; }
-.backend-bars { height: 32px; display: flex; align-items: end; gap: 3px; overflow: hidden; }
-.backend-bars i { flex: 1; min-width: 2px; background: linear-gradient(#42d6ff, #2f80ff); border-radius: 2px 2px 0 0; }
-.backend-car-title { color: #42d6ff; }
-.backend-drivers { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 14px 0; }
-.backend-drivers article { display: grid; gap: 7px; padding: 14px; background: #101923; border: 1px solid #1b2938; }
-.backend-drivers span { color: #9aabbd; font-size: 12px; }
-.backend-message { max-width: 700px; margin: 12vh auto; padding: 28px; color: #dce6f1; background: #0d141d; border: 1px solid #243346; border-radius: 8px; }
-.backend-message a { color: #42d6ff; }
-.backend-message code { display: block; margin-top: 16px; overflow-wrap: anywhere; color: #42d6ff; }
-.backend-error { color: #ff9b9b; }
-@media (max-width: 700px) {
-  .backend-stats { grid-template-columns: repeat(2, 1fr); }
-  .backend-header { padding: 0 14px; }
-  .backend-session { font-size: 0; }
-  .backend-session select { max-width: 190px; font-size: 12px; }
-  .backend-panel-heading { align-items: flex-start; flex-direction: column; }
-  .backend-chart-row { grid-template-columns: 45px 1fr; padding: 8px 0; }
-  .backend-bars { grid-column: 1 / -1; grid-row: 2; }
-  .backend-chart-row small { grid-column: 2; grid-row: 1; text-align: right; }
+/* ==========================================================================
+   Añadido al conectar con el backend (no modifica las reglas anteriores)
+   ========================================================================== */
+
+/* Foco visible para quien navega con teclado */
+button:focus-visible,
+select:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+.ranking-list:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
 }
+
+/* Selectores de sesión y de umbral */
+.session-select,
+.filter-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.session-select { margin: -14px 0 24px; }
+.select-label { color: #8494a6; font-size: 12px; }
+.session-select select,
+.filter-select select {
+  height: 34px;
+  border: 1px solid #243346;
+  background: #0e1721;
+  border-radius: 3px;
+  color: #c4d1de;
+  font-size: 12px;
+  padding: 0 12px;
+}
+
+/* Tarjetas de categoría y tarjetas de métricas */
+.category-stats {
+  color: #9fb0c2;
+  font: 400 11px 'Space Mono', monospace;
+  margin: -6px 0 16px;
+}
+.metric-card small.metric-note { color: #b4c3d3; font-size: 11px; margin-top: 8px; }
+.metric-card small.metric-detail { color: #8fa3b8; font-size: 10px; margin-top: 4px; }
+
+/* Gráficas */
+.chart-wrap { position: relative; }
+.chart-empty { color: #8494a6; font-size: 13px; padding: 24px 14px; }
+.chart-note { color: #7d92a8; font-size: 11px; margin: 12px 0 0; }
+.chart-block + .chart-block { margin-top: 22px; }
+.legend span { font-size: 11px; color: #9fb0c2; }
+.legend svg { flex: none; }
+.chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, -125%);
+  display: grid;
+  gap: 2px;
+  background: #101a26;
+  border: 1px solid #3b6490;
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: #dbe7f3;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.chart-tooltip.below { transform: translate(-50%, 25%); }
+.chart-tooltip strong { font: 700 15px 'Space Mono', monospace; color: var(--cyan); }
+.chart-tooltip em { font-style: normal; color: #9fb0c2; }
+
+/* Filtros (selects dentro de la fila de filtros) */
+.filter-row .filter-select { min-width: 0; }
+
+/* Clasificación con desplazamiento cuando hay muchos coches */
+.ranking-panel .ranking-list { max-height: 290px; overflow-y: auto; }
+
+/* Detalle por piloto */
+.driver-sectors { display: block; color: #8fa3b8; font: 400 10px 'Space Mono', monospace; margin-top: 4px; }
+
+/* Tabla alternativa a las gráficas */
+.lap-table { border-top: 1px solid #1a2938; padding: 12px 14px; }
+.lap-table summary { cursor: pointer; color: #9fb0c2; font-size: 12px; }
+.table-scroll { overflow: auto; max-height: 320px; margin-top: 10px; }
+.lap-table table { width: 100%; border-collapse: collapse; font: 400 11px 'Space Mono', monospace; }
+.lap-table th,
+.lap-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #182636; white-space: nowrap; }
+.lap-table th { position: sticky; top: 0; background: #0e1721; color: #9fb0c2; }
+
+/* Pantallas de estado (cargando / error) */
+.status { width: min(720px, calc(100% - 48px)); margin: 90px auto; }
+.status h1 { font-size: 28px; margin: 0 0 12px; letter-spacing: -0.03em; }
+.status p { color: #9fb0c2; line-height: 1.6; }
+
+/* ---- Panel de pilotos (según la imagen de referencia) ---- */
+.driver-panel .car-number {
+  width: auto;
+  min-width: 34px;
+  padding: 0 8px;
+  background: rgba(212, 242, 92, 0.14);
+  color: #d4f25c;
+}
+.driver-chart .chart-head,
+.driver-summary .summary-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.driver-chart .chart-head h3,
+.driver-summary .summary-head h3 { font-size: 14px; font-weight: 500; margin: 0; }
+.chart-head span,
+.summary-head span { color: #7d92a8; font: 400 11px 'Space Mono', monospace; }
+
+.pace-row {
+  display: grid;
+  grid-template-columns: 4px 1fr auto;
+  gap: 6px 12px;
+  align-items: start;
+  padding: 16px 0 14px;
+  border-bottom: 1px solid #182636;
+}
+.pace-swatch { width: 3px; height: 18px; border-radius: 1px; margin-top: 2px; }
+.pace-name strong { font-size: 14px; font-weight: 500; }
+.pace-name small {
+  display: block;
+  color: #8fa3b8;
+  font: 400 10px 'Space Mono', monospace;
+  margin-top: 5px;
+}
+.pace-value { text-align: right; }
+.pace-value span { font: 400 18px 'Space Mono', monospace; }
+.pace-value small { display: block; color: #8fa3b8; font: 400 11px 'Space Mono', monospace; margin-top: 5px; }
+.pace-track { grid-column: 1 / -1; height: 6px; background: #182536; border-radius: 3px; overflow: hidden; }
+.pace-track i { display: block; height: 100%; border-radius: 3px; }
+.summary-note { color: #7d92a8; font-size: 11px; line-height: 1.5; margin: 14px 0 0; }
+
+/* ---- Gráfico ritmo por vuelta (stints) ---- */
+.stint-section { margin-top: 34px; }
+.stint-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #1a2938;
+}
+.check { display: inline-flex; align-items: center; gap: 8px; color: #c4d1de; font-size: 12px; cursor: pointer; }
+.check input { width: 16px; height: 16px; accent-color: var(--blue); cursor: pointer; }
+.stint-body { padding: 16px; }
+.stint-body .chart-head h3 { font-size: 14px; font-weight: 500; margin: 0; }
+.stint-table { margin-top: 18px; max-height: none; }
+.stint-table table { width: 100%; border-collapse: collapse; font: 400 12px 'Space Mono', monospace; }
+.stint-table th,
+.stint-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #182636; white-space: nowrap; }
+.stint-table th { color: #9fb0c2; font-weight: 400; }
+
+/* ---- Avisos sobre los datos importados ---- */
+.notice {
+  border: 1px solid #6b5a1e;
+  background: #1d1a0e;
+  color: #f0dc9a;
+  border-radius: 5px;
+  padding: 12px 14px;
+  margin: 0 0 18px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.notice p { margin: 0; }
+.notice p + p { margin-top: 8px; }

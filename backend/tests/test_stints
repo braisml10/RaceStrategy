@@ -1,0 +1,54 @@
+import pytest
+
+from degradation import stint_degradation
+from importer import import_data
+from laps import mark_pace_laps
+from helpers import STINT_CAR, car_rows, pace, write_session
+from stints import mark_stints, stint_summary
+
+
+@pytest.fixture(scope="module")
+def marked(tmp_path_factory):
+    rows = car_rows("5", STINT_CAR) + car_rows(
+        "6", [(130.0, "Dan D", 20.0, False, "GF"), pace(101.0, "Dan D"), pace(101.2, "Dan D")],
+        category="LMGT3",
+    )
+    path = write_session(tmp_path_factory.mktemp("d") / "s.csv", rows)
+    return mark_pace_laps(import_data(path))
+
+
+def only(df, number="5"):
+    return df[df["NUMBER"] == number]
+
+
+def test_stint_numbering(marked):
+    stints = mark_stints(only(marked))
+    assert stints["STINT"].tolist() == [1] * 6 + [2] * 6 + [3] * 4
+    assert stints["STINT_LAP"].tolist() == [1, 2, 3, 4, 5, 6] * 2 + [1, 2, 3, 4]
+    assert mark_stints(marked).groupby("NUMBER")["STINT"].max().to_dict() == {"5": 3, "6": 1}
+
+
+def test_stint_summary(marked):
+    s = stint_summary(only(marked)).set_index("STINT")
+    assert len(s) == 3
+    two = s.loc[2]
+    assert (two["START_LAP"], two["END_LAP"], two["LAPS"], two["PACE_LAPS"]) == (7, 12, 6, 4)
+    assert two["DRIVER_NAME"] == "Ben B"
+    assert two["PIT_BEFORE_SECONDS"] == pytest.approx(65.0)
+    assert two["DURATION_SECONDS"] == pytest.approx(636.2 - 65.0)   # en pista, sin la parada
+    assert two["AVG_PACE"] == pytest.approx(94.3)
+    assert two["BEST_LAP"] == pytest.approx(94.0)
+    assert s.loc[1, "DURATION_SECONDS"] == pytest.approx(600.6 - 30.0)
+
+
+def test_degradation(marked):
+    deg = stint_degradation(only(marked), min_laps=3).set_index("STINT")
+    assert deg["NET_SLOPE"].tolist() == pytest.approx([0.1, 0.2, 0.1])
+    assert deg["PACE_LAPS"].tolist() == [4, 4, 3]
+    assert deg.loc[2, "R2"] == pytest.approx(1.0)
+    adjusted = stint_degradation(only(marked), min_laps=3, fuel_effect_s_per_lap=0.03)
+    assert adjusted["ADJUSTED_SLOPE"].tolist() == pytest.approx([0.13, 0.23, 0.13])
+    # por defecto exige 5 vueltas de ritmo: ningún stint sintético llega
+    assert stint_degradation(only(marked)).empty
+    with pytest.raises(ValueError):
+        stint_degradation(only(marked), min_laps=1)
