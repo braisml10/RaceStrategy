@@ -63,7 +63,6 @@ const PALETTE = ["#2F80FF", "#42D6FF", "#9D86FF", "#7B91AD", "#FFB454", "#5BD19F
 type Shape = "circle" | "diamond" | "square" | "triangle" | "cross"
 const SHAPES: Shape[] = ["circle", "diamond", "square", "triangle", "circle", "diamond"]
 const DRIVER_PALETTE = ["#D4F25C", "#5FD3E8", "#B79CFF", "#FFB454", "#5BD19F", "#FF8FA3"]
-const CAR_COLOR = "#E6EDF5"
 const EXCLUDED_COLOR = "#8392A5"
 
 type Mode = "ritmo" | "todas"
@@ -149,6 +148,7 @@ type Series = {
   shape: Shape
   line: boolean
   dashed?: boolean // línea discontinua que une todos sus puntos (tendencia)
+  dash?: string // patrón de trazo (stroke-dasharray) para distinguir series del mismo color
   markers?: boolean // false: solo línea, sin puntos
   points: Point[]
 }
@@ -202,7 +202,16 @@ function Legend({ series }: { series: Series[] }) {
         <span key={s.id}>
           <svg width="24" height="12" viewBox="0 0 24 12" aria-hidden="true">
             {s.line && (
-              <line x1="1" y1="6" x2="23" y2="6" stroke={s.color} strokeWidth="2" strokeLinecap="round" />
+              <line
+                x1="1"
+                y1="6"
+                x2="23"
+                y2="6"
+                stroke={s.color}
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeDasharray={s.dash ?? (s.dashed ? "6 4" : undefined)}
+              />
             )}
             <Marker shape={s.shape} x={12} y={6} r={3.4} color={s.color} />
           </svg>
@@ -282,11 +291,13 @@ function LineChart({
   bands = [],
   interactiveY = false,
   resetKey = "",
+  xLabel = "Vuelta",
 }: {
   series: Series[]
   compact?: boolean
   label: string
   bands?: Band[]
+  xLabel?: string // nombre del eje X: "Vuelta" o "Vuelta del stint"
   interactiveY?: boolean // permite moverse y ampliar en el eje Y
   resetKey?: string // al cambiar, vuelve a mostrarse todo el rango
 }) {
@@ -515,7 +526,7 @@ function LineChart({
             </text>
           ))}
           <text x={width - pad.right} y={height - 8} textAnchor="end" fill="#62758a" fontSize="10">
-            vuelta
+            {xLabel.toLowerCase()}
           </text>
 
           <g clipPath={interactiveY ? `url(#${clipId})` : undefined}>
@@ -531,7 +542,7 @@ function LineChart({
                       fill="none"
                       stroke={s.color}
                       strokeWidth={s.dashed ? 1.6 : 2}
-                      strokeDasharray={s.dashed ? "6 4" : undefined}
+                      strokeDasharray={s.dash ?? (s.dashed ? "6 4" : undefined)}
                       strokeOpacity={s.dashed ? 0.95 : 0.75}
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -546,7 +557,7 @@ function LineChart({
                     if (!visible(p.y)) return null
                     const isHover = hover?.s === si && hover.p === pi
                     return (
-                      <g key={`${s.id}-${p.x}`}>
+                      <g key={`${s.id}-${p.x}-${pi}`}>
                         {p.best && (
                           <circle
                             cx={sx(p.x)}
@@ -598,7 +609,9 @@ function LineChart({
             className={`chart-tooltip ${tooltip.top < 30 ? "below" : ""}`}
             style={{ left: `${tooltip.left}%`, top: `${tooltip.top}%` }}
           >
-            <b>Vuelta {hovered.x}</b>
+            <b>
+              {xLabel} {hovered.x}
+            </b>
             <strong>{formatLapTime(hovered.y)}</strong>
             <span>{hovered.who}</span>
             {hovered.best && <em>Mejor vuelta de la serie</em>}
@@ -643,20 +656,6 @@ function excludedSeries(data: CarData, mode: Mode): Series[] {
   ]
 }
 
-function carSeries(data: CarData, mode: Mode): Series[] {
-  return [
-    {
-      id: "car",
-      label: `Coche #${data.car.number}`,
-      color: CAR_COLOR,
-      shape: "circle",
-      line: true,
-      points: markBest(lapPoints(data, true)),
-    },
-    ...excludedSeries(data, mode),
-  ]
-}
-
 function driverSeries(data: CarData, mode: Mode): Series[] {
   return [
     ...data.drivers.map((driver, i) => ({
@@ -669,6 +668,73 @@ function driverSeries(data: CarData, mode: Mode): Series[] {
     })),
     ...excludedSeries(data, mode),
   ]
+}
+
+// Superpuesto: cada stint de cada piloto empieza en la vuelta 1 (salida de boxes), de modo
+// que los ritmos de los pilotos se ven unos encima de otros. El color y la forma
+// identifican al piloto; el trazo, el stint cuando un mismo piloto tiene varios.
+const STINT_DASHES = [undefined, "7 4", "2 4", "10 3 2 3"]
+
+function overlaySeries(data: CarData, mode: Mode): Series[] {
+  const out: Series[] = []
+  data.drivers.forEach((driver, di) => {
+    const color = DRIVER_PALETTE[di % DRIVER_PALETTE.length]
+    const shape = SHAPES[di % SHAPES.length]
+    const mine = data.laps.filter((l) => l.driver === driver.name)
+    const stints = [...new Set(mine.map((l) => l.stint))].sort((a, b) => a - b)
+    const bestY = Math.min(
+      ...mine.flatMap((l) => (l.isPace && l.seconds !== null ? [l.seconds] : [])),
+    )
+    stints.forEach((stint, si) => {
+      const points: Point[] = mine.flatMap((l) =>
+        l.stint !== stint || !l.isPace || l.seconds === null
+          ? []
+          : [
+              {
+                x: l.stintLap,
+                y: l.seconds,
+                who: driver.name,
+                note: `Vuelta ${l.lap} de carrera · Stint ${stint}`,
+                best: l.seconds === bestY,
+              },
+            ],
+      )
+      if (!points.length) return
+      out.push({
+        id: `${driver.name}-s${stint}`,
+        label: stints.length > 1 ? `${driver.name} · Stint ${stint}` : driver.name,
+        color,
+        shape,
+        line: true,
+        dash: STINT_DASHES[si % STINT_DASHES.length],
+        points,
+      })
+    })
+  })
+  if (mode === "todas") {
+    const points: Point[] = data.laps.flatMap((l) =>
+      l.isPace || l.seconds === null
+        ? []
+        : [
+            {
+              x: l.stintLap,
+              y: l.seconds,
+              who: l.driver,
+              note: `Vuelta ${l.lap} de carrera · Stint ${l.stint} · ${l.status}`,
+            },
+          ],
+    )
+    if (points.length)
+      out.push({
+        id: "excluded",
+        label: "Vueltas excluidas (boxes, FCY, lentas)",
+        color: EXCLUDED_COLOR,
+        shape: "cross",
+        line: false,
+        points,
+      })
+  }
+  return out
 }
 
 // Coches marcados en la clasificación para comparar su ritmo (máx. 4). Cada uno
@@ -762,39 +828,35 @@ function Status({
   )
 }
 
-function Notice({ items }: { items: string[] }) {
-  if (!items.length) return null
-  return (
-    <div className="notice" role="note">
-      {items.map((text) => (
-        <p key={text}>
-          <strong>Aviso de datos:</strong> {text}
-        </p>
-      ))}
-    </div>
-  )
-}
-
 function SessionSelect({
   sessions,
   value,
   onChange,
   className,
+  category,
+  categoryLabel,
 }: {
   sessions: SessionInfo[]
   value: string
   onChange: (id: string) => void
   className: string
+  category?: string // si se indica, solo se pueden elegir sesiones que tengan esa categoría
+  categoryLabel?: string
 }) {
   return (
     <label className={className}>
       <span className="select-label">Sesión</span>
       <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {sessions.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
+        {sessions.map((s) => {
+          const unavailable =
+            category !== undefined && s.categories !== null && !s.categories.includes(category)
+          return (
+            <option key={s.id} value={s.id} disabled={unavailable}>
+              {s.name}
+              {unavailable ? ` — sin ${categoryLabel ?? category}` : ""}
+            </option>
+          )
+        })}
       </select>
     </label>
   )
@@ -831,7 +893,6 @@ function Landing({
           value={sessionId}
           onChange={onSession}
         />
-        <Notice items={overview.notices} />
         <div className="category-grid">
           {overview.categories.map((category) => {
             const copy = categoryCopy[category.id] ?? fallbackCopy
@@ -1102,7 +1163,6 @@ function Dashboard({
   onSlow,
   category,
   categories,
-  notices,
   onCategory,
   onHome,
 }: {
@@ -1114,12 +1174,12 @@ function Dashboard({
   onSlow: (pct: number) => void
   category: string
   categories: { id: string; label: string }[]
-  notices: string[]
   onCategory: (category: string) => void
   onHome: () => void
 }) {
   const [metric, setMetric] = useState<Metric>("lap")
   const [mode, setMode] = useState<Mode>("ritmo")
+  const [overlay, setOverlay] = useState(false)
   const [selectedCar, setSelectedCar] = useState<string | null>(null)
   const [compare, setCompare] = useState<Selection[]>([])
 
@@ -1153,10 +1213,10 @@ function Dashboard({
     () => (cat.data ? paceSeries(cat.data, activeCompare) : []),
     [cat.data, activeCompare],
   )
-  const singleSeries = useMemo(() => (car.data ? carSeries(car.data, mode) : []), [car.data, mode])
   const compareSeries = useMemo(
-    () => (car.data ? driverSeries(car.data, mode) : []),
-    [car.data, mode],
+    () =>
+      car.data ? (overlay ? overlaySeries(car.data, mode) : driverSeries(car.data, mode)) : [],
+    [car.data, mode, overlay],
   )
 
   if (cat.error) return <Status title="No se pudieron cargar los datos" detail={cat.error} />
@@ -1256,14 +1316,14 @@ function Dashboard({
           </div>
         </section>
 
-        <Notice items={notices} />
-
         <section className="filter-row" aria-label="Filtros del análisis">
           <SessionSelect
             className="filter-select"
             sessions={sessions}
             value={sessionId}
             onChange={onSession}
+            category={category}
+            categoryLabel={data.category.label}
           />
           <label className="filter-select">
             <span className="select-label">Vuelta lenta</span>
@@ -1469,25 +1529,25 @@ function Dashboard({
                         <h3>Ritmo por vuelta</h3>
                         <span>{timeFormatLabel()} ↓</span>
                       </div>
+                      <label className="check overlay-toggle">
+                        <input
+                          type="checkbox"
+                          checked={overlay}
+                          onChange={(event) => setOverlay(event.target.checked)}
+                        />
+                        Superponer pilotos
+                      </label>
                       <Legend series={compareSeries} />
                       <LineChart
                         series={compareSeries}
-                        label={`Tiempo por vuelta de los pilotos del coche ${car.data.car.number}`}
-                      />
-                    </div>
-                    <div className="chart-block">
-                      <div className="chart-head">
-                        <h3>Evolución del coche</h3>
-                        <span>todos los pilotos</span>
-                      </div>
-                      <LineChart
-                        series={singleSeries}
-                        compact
-                        label={`Tiempo por vuelta del coche ${car.data.car.number}`}
+                        xLabel={overlay ? "Vuelta del stint" : "Vuelta"}
+                        label={`Tiempo por vuelta de los pilotos del coche ${car.data.car.number}${overlay ? ", superpuestos por vuelta del stint" : ""}`}
                       />
                     </div>
                     <p className="chart-note">
-                      El círculo blanco marca la mejor vuelta de cada serie.
+                      {overlay
+                        ? "Cada stint empieza en la vuelta 1 (salida de boxes) para ver los ritmos de los pilotos unos encima de otros. Si un piloto tiene varios stints, se distinguen por el trazo. El círculo blanco marca la mejor vuelta de cada piloto."
+                        : "El círculo blanco marca la mejor vuelta de cada piloto."}
                     </p>
                   </div>
 
@@ -1645,7 +1705,6 @@ export default function App() {
       onSlow={setSlow}
       category={category}
       categories={overview.data.categories}
-      notices={overview.data.notices}
       onCategory={setCategory}
       onHome={() => setCategory(null)}
     />

@@ -18,8 +18,17 @@ def client(tmp_path, monkeypatch):
 
 def test_sessions_and_settings(client):
     body = client.get("/api/sessions").json()
-    assert body["sessions"] == [{"id": "FP1.csv", "name": "FP1"}]
+    assert body["sessions"] == [
+        {"id": "FP1.csv", "name": "FP1", "categories": ["HYPERCAR", "LMGT3"]}
+    ]
     assert body["settings"] == {"msSeparator": ".", "slowThresholdPct": 107}
+
+
+def test_sessions_list_their_categories(client, tmp_path):
+    write_session(tmp_path / "GT3.csv", [SESSION_ROWS[10], SESSION_ROWS[11]])  # solo el #99 (LMGT3)
+    (tmp_path / "BAD.csv").write_text("A;B\n1;2\n")                           # sin columna CLASS
+    cats = {s["id"]: s["categories"] for s in client.get("/api/sessions").json()["sessions"]}
+    assert cats == {"BAD.csv": None, "FP1.csv": ["HYPERCAR", "LMGT3"], "GT3.csv": ["LMGT3"]}
 
 
 def test_overview(client):

@@ -207,6 +207,35 @@ def import_data(
     return convert_time_columns(df)
 
 
+def read_categories(file_path: str | Path) -> list[str] | None:
+    """Categorías (columna CLASS) que contiene un archivo, leyendo solo esa columna.
+
+    Es mucho más rápido que importar todo; sirve para saber qué sesiones tienen
+    datos de una categoría sin cargarlas. Devuelve None si no se puede determinar.
+    """
+    path = validate_file(file_path)
+    wanted = lambda column: str(column).strip().upper() == "CLASS"  # noqa: E731
+    try:
+        if path.suffix.lower() in EXCEL_EXTENSIONS:
+            df = pd.read_excel(path, usecols=wanted, dtype=str)
+        else:
+            df = None
+            for encoding in ("utf-8-sig", "latin-1"):
+                try:
+                    df = pd.read_csv(
+                        path, sep=None, engine="python", encoding=encoding,
+                        dtype=str, skipinitialspace=True, usecols=wanted,
+                    )
+                    break
+                except UnicodeDecodeError:
+                    continue
+    except Exception:
+        return None
+    if df is None or df.shape[1] == 0:
+        return None
+    return sorted(df.iloc[:, 0].dropna().str.strip().unique().tolist())
+
+
 def get_data_info(df: pd.DataFrame) -> dict:
     """Resumen básico del DataFrame importado."""
     return {

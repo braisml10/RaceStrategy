@@ -21,7 +21,7 @@ from config import (
     CATEGORY_LABELS, CORS_ORIGINS, DATA_DIR, MS_SEPARATOR, SLOW_LAP_THRESHOLD,
 )
 from degradation import stint_degradation
-from importer import SUPPORTED_EXTENSIONS, import_data, separate_shared_numbers
+from importer import SUPPORTED_EXTENSIONS, import_data, read_categories, separate_shared_numbers
 from laps import (
     format_gap, format_hms, format_lap_time, lap_series, list_cars, list_categories,
     mark_pace_laps,
@@ -77,6 +77,20 @@ def _session_data(session: str, slow_pct: int = DEFAULT_SLOW_PCT) -> pd.DataFram
         return _marked(str(path), path.stat().st_mtime, slow_pct)
     except Exception as error:  # mensaje legible para la interfaz
         raise HTTPException(422, f"No se pudo importar {session}: {error}") from error
+
+
+@lru_cache(maxsize=64)
+def _categories(path: str, modified: float) -> tuple[str, ...] | None:
+    """Categorías de un archivo (solo lee la columna CLASS). None si no se sabe."""
+    found = read_categories(path)
+    return None if found is None else tuple(found)
+
+
+def _session_categories(path: Path) -> list[str] | None:
+    found = _categories(str(path), path.stat().st_mtime)
+    if found is None:
+        return None
+    return list_categories(pd.DataFrame({"CLASS": list(found)}))
 
 
 def _session_notices(session: str) -> list[str]:
@@ -179,7 +193,10 @@ def _pace_points(df: pd.DataFrame, car: str) -> list[dict]:
 def sessions() -> dict:
     """Sesiones disponibles y ajustes que necesita el frontend."""
     return {
-        "sessions": [{"id": name, "name": Path(name).stem} for name in _session_files()],
+        "sessions": [
+            {"id": name, "name": Path(name).stem, "categories": _session_categories(path)}
+            for name, path in _session_files().items()
+        ],
         "settings": {"msSeparator": MS_SEPARATOR, "slowThresholdPct": DEFAULT_SLOW_PCT},
         "dataDir": str(DATA_DIR),
     }

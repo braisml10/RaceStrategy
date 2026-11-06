@@ -11,7 +11,8 @@ export type Metric = "lap" | "s1" | "s2" | "s3"
 export type TimeValue = { seconds: number | null; text: string }
 
 export type Settings = { msSeparator: string; slowThresholdPct: number }
-export type SessionInfo = { id: string; name: string }
+// categories: las categorías que trae el archivo (null si no se pudo determinar)
+export type SessionInfo = { id: string; name: string; categories: string[] | null }
 export type SessionsResponse = {
   sessions: SessionInfo[]
   settings: Settings
@@ -39,7 +40,6 @@ export type CategorySummary = {
 }
 export type Overview = {
   session: SessionInfo
-  notices: string[]
   laps: number
   cars: number
   drivers: number

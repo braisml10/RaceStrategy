@@ -933,21 +933,6 @@ summary:focus-visible,
 .stint-table th,
 .stint-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #182636; white-space: nowrap; }
 .stint-table th { color: #9fb0c2; font-weight: 400; }
-
-/* ---- Avisos sobre los datos importados ---- */
-.notice {
-  border: 1px solid #6b5a1e;
-  background: #1d1a0e;
-  color: #f0dc9a;
-  border-radius: 5px;
-  padding: 12px 14px;
-  margin: 0 0 18px;
-  font-size: 12px;
-  line-height: 1.55;
-}
-.notice p { margin: 0; }
-.notice p + p { margin-top: 8px; }
-
 /* ---- Comparar coches y zoom vertical (gráfica "Evolución del ritmo") ---- */
 .ranking-list li {
   grid-template-columns: 22px 30px 1fr auto 45px;
@@ -984,3 +969,6 @@ summary:focus-visible,
 .chart-tools-hint { color: #7d92a8; font-size: 11px; margin-left: 6px; }
 .line-chart.interactive { cursor: grab; touch-action: pan-x; user-select: none; }
 .line-chart.interactive.dragging { cursor: grabbing; }
+
+/* ---- Superponer pilotos ---- */
+.overlay-toggle { margin: 12px 0 2px; }
