@@ -11,7 +11,7 @@ texto mm:ss.ddd (para mostrar), de modo que el formato vive solo en Python.
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
@@ -36,6 +36,10 @@ REQUIRED_COLUMNS = [
     "DRIVER_NAME", "CLASS", "TEAM", "HOUR", "ELAPSED",
 ]
 DEFAULT_SLOW_PCT = round(SLOW_LAP_THRESHOLD * 100)
+
+# Sesión virtual que junta todas las sesiones de la carpeta (p. ej. FP1 + FP2 + FP3).
+OVERALL_ID = "__all__"
+OVERALL_NAME = "Todas las sesiones"
 TREND_MIN_LAPS = 3  # vueltas de ritmo mínimas para dibujar la tendencia de un stint
 
 app = FastAPI(title="WEC Strategy API")
@@ -48,11 +52,50 @@ app.add_middleware(
 # Carga (con caché: importar un CSV cuesta, consultarlo no)
 # ---------------------------------------------------------------------------
 def _session_files() -> dict[str, Path]:
+    """Todas las sesiones de todas las carpetas. El id es la ruta relativa a DATA_DIR
+    (con "/"), p. ej. "WEC/2026/Barcelona/FP1.CSV". Se ignoran los temporales de Excel
+    ("~$archivo.xlsx", que existen mientras el archivo está abierto) y los ocultos."""
     if not DATA_DIR.is_dir():
         return {}
-    return {
-        p.name: p for p in sorted(DATA_DIR.iterdir()) if p.suffix.lower() in SUPPORTED_EXTENSIONS
-    }
+    found = sorted(
+        p for p in DATA_DIR.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() in SUPPORTED_EXTENSIONS
+        and not p.name.startswith(("~$", "."))
+    )
+    return {p.relative_to(DATA_DIR).as_posix(): p for p in found}
+
+
+def _event_of(session_id: str) -> str:
+    """Carpeta (evento) de una sesión; "." si el archivo está en la raíz."""
+    return PurePosixPath(session_id).parent.as_posix()
+
+
+def _event_name(event: str) -> str:
+    """'ALMS/paul-ricard' -> 'ALMS · Paul Ricard'."""
+    if event == ".":
+        return DATA_DIR.name
+    def pretty(part: str) -> str:
+        text = part.replace("-", " ").replace("_", " ")
+        return text.title() if text.islower() else text
+    return " · ".join(pretty(part) for part in event.split("/"))
+
+
+def _overall_id(event: str) -> str:
+    return OVERALL_ID if event == "." else f"{event}/{OVERALL_ID}"
+
+
+def _overall_event(session: str) -> str | None:
+    """Evento al que pertenece una sesión 'todas las sesiones'; None si es una sesión normal."""
+    if session == OVERALL_ID:
+        return "."
+    if session.endswith("/" + OVERALL_ID):
+        return session[: -len(OVERALL_ID) - 1]
+    return None
+
+
+def _event_files(event: str) -> list[Path]:
+    return [p for sid, p in _session_files().items() if _event_of(sid) == event]
 
 
 @lru_cache(maxsize=8)
@@ -65,10 +108,43 @@ def _load(path: str, modified: float) -> tuple[pd.DataFrame, list[str]]:
 
 @lru_cache(maxsize=32)
 def _marked(path: str, modified: float, slow_pct: int) -> pd.DataFrame:
-    return mark_pace_laps(_load(path, modified)[0], slow_pct / 100)
+    df = mark_pace_laps(_load(path, modified)[0], slow_pct / 100)
+    df["SESSION"] = Path(path).stem
+    df["SESSION_LAP"] = df["LAP_NUMBER"]
+    return df
+
+
+@lru_cache(maxsize=8)
+def _overall(signature: tuple[tuple[str, float], ...], slow_pct: int) -> pd.DataFrame:
+    """Todas las sesiones juntas. Cada sesión se clasifica por separado (la vuelta
+    lenta se mide contra la mejor del coche en ESA sesión). Como cada sesión
+    empieza en la vuelta 1, LAP_NUMBER pasa a ser la vuelta acumulada del coche
+    (FP1, luego FP2...) y SESSION_LAP conserva la vuelta dentro de su sesión."""
+    frames = []
+    for path, modified in signature:
+        try:
+            frames.append(_marked(path, modified, slow_pct))
+        except Exception as error:
+            raise ValueError(f"{Path(path).name}: {error}") from error
+    df = pd.concat(frames, ignore_index=True)
+    order = {name: i for i, name in enumerate(dict.fromkeys(df["SESSION"]))}
+    df["_ORDER"] = df["SESSION"].map(order)
+    df = df.sort_values(["NUMBER", "_ORDER", "SESSION_LAP"]).reset_index(drop=True)
+    df["LAP_NUMBER"] = df.groupby("NUMBER").cumcount() + 1
+    return df.drop(columns="_ORDER")
 
 
 def _session_data(session: str, slow_pct: int = DEFAULT_SLOW_PCT) -> pd.DataFrame:
+    event = _overall_event(session)
+    if event is not None:
+        files = _event_files(event)
+        if len(files) < 2:
+            raise HTTPException(404, "Para ver todas las sesiones hace falta más de un archivo.")
+        signature = tuple((str(p), p.stat().st_mtime) for p in files)
+        try:
+            return _overall(signature, slow_pct)
+        except Exception as error:
+            raise HTTPException(422, f"No se pudieron juntar las sesiones: {error}") from error
     # El nombre se busca entre los archivos de la carpeta: no se puede salir de ella.
     path = _session_files().get(session)
     if path is None:
@@ -94,8 +170,9 @@ def _session_categories(path: Path) -> list[str] | None:
 
 
 def _session_notices(session: str) -> list[str]:
-    path = _session_files()[session]  # _session_data ya comprobó que existe
-    return _load(str(path), path.stat().st_mtime)[1]
+    event = _overall_event(session)
+    paths = _event_files(event) if event is not None else [_session_files()[session]]
+    return [n for p in paths for n in _load(str(p), p.stat().st_mtime)[1]]
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +203,7 @@ def _best(row) -> dict:
         **_time(row.TIME),
         "car": row.CAR,
         "team": _text(row.TEAM),
+        "session": _text(row.SESSION),
         "driver": row.DRIVER,
         "lap": int(row.LAP),
         "clock": format_hms(row.CLOCK),
@@ -140,6 +218,7 @@ def _ranking(ranking: pd.DataFrame) -> list[dict]:
             "car": r.CAR,
             "team": _text(r.TEAM),
             "driver": r.DRIVER,
+            "session": _text(r.SESSION),
             **_time(r.TIME),
             "gapText": "—" if r.POSITION == 1 else format_gap(r.GAP),
             "lap": int(r.LAP),
@@ -181,7 +260,13 @@ def _stints(car: pd.DataFrame) -> list[dict]:
 def _pace_points(df: pd.DataFrame, car: str) -> list[dict]:
     laps = df[(df["NUMBER"] == car) & df["IS_PACE_LAP"]].sort_values("LAP_NUMBER")
     return [
-        {"lap": int(r.LAP_NUMBER), "seconds": _num(r.LAP_TIME_SECONDS), "driver": r.DRIVER_NAME}
+        {
+            "lap": int(r.LAP_NUMBER),
+            "seconds": _num(r.LAP_TIME_SECONDS),
+            "driver": r.DRIVER_NAME,
+            "session": r.SESSION,
+            "sessionLap": int(r.SESSION_LAP),
+        }
         for r in laps.itertuples()
     ]
 
@@ -192,20 +277,46 @@ def _pace_points(df: pd.DataFrame, car: str) -> list[dict]:
 @app.get("/api/sessions")
 def sessions() -> dict:
     """Sesiones disponibles y ajustes que necesita el frontend."""
+    by_event: dict[str, list[dict]] = {}
+    for name, path in _session_files().items():
+        event = _event_of(name)
+        by_event.setdefault(event, []).append(
+            {
+                "id": name,
+                "name": Path(name).stem,
+                "overall": False,
+                "event": event,
+                "eventName": _event_name(event),
+                "categories": _session_categories(path),
+            }
+        )
+    items: list[dict] = []
+    for event, group in by_event.items():
+        items.extend(group)
+        if len(group) >= 2:  # la sesión que junta las de ese evento, al final de su grupo
+            known = [item["categories"] for item in group]
+            union = None
+            if all(c is not None for c in known):
+                union = list_categories(pd.DataFrame({"CLASS": sorted({c for cs in known for c in cs})}))
+            items.append(
+                {
+                    "id": _overall_id(event), "name": OVERALL_NAME, "overall": True,
+                    "event": event, "eventName": _event_name(event), "categories": union,
+                }
+            )
     return {
-        "sessions": [
-            {"id": name, "name": Path(name).stem, "categories": _session_categories(path)}
-            for name, path in _session_files().items()
-        ],
+        "sessions": items,
         "settings": {"msSeparator": MS_SEPARATOR, "slowThresholdPct": DEFAULT_SLOW_PCT},
         "dataDir": str(DATA_DIR),
     }
 
 
-@app.get("/api/sessions/{session}/overview")
+@app.get("/api/sessions/{session:path}/overview")
 def overview(session: str) -> dict:
     """Resumen de la sesión y de cada categoría (pantalla de inicio)."""
     df = _session_data(session)
+    overall = _overall_event(session) is not None
+    event = _overall_event(session) if overall else _event_of(session)
     categories = []
     for category in list_categories(df):
         data = df[df["CLASS"] == category]
@@ -220,18 +331,26 @@ def overview(session: str) -> dict:
             }
         )
     return {
-        "session": {"id": session, "name": Path(session).stem},
+        "session": {
+            "id": session,
+            "name": OVERALL_NAME if overall else Path(session).stem,
+            "event": event,
+            "eventName": _event_name(event),
+        },
+        "overall": overall,
+        "sessionCount": int(df["SESSION"].nunique()),
         "notices": _session_notices(session),
         "laps": len(df),
         "cars": int(df["NUMBER"].nunique()),
         "drivers": int(df["DRIVER_NAME"].nunique()),
-        "clockStart": format_hms(df["HOUR_SECONDS"].min()),
-        "clockEnd": format_hms(df["HOUR_SECONDS"].max()),
+        # la hora del día solo tiene sentido dentro de una sesión
+        "clockStart": "" if overall else format_hms(df["HOUR_SECONDS"].min()),
+        "clockEnd": "" if overall else format_hms(df["HOUR_SECONDS"].max()),
         "categories": categories,
     }
 
 
-@app.get("/api/sessions/{session}/categories/{category}")
+@app.get("/api/sessions/{session:path}/categories/{category}")
 def category_view(
     session: str, category: str, slow: int = Query(DEFAULT_SLOW_PCT, ge=100, le=200)
 ) -> dict:
@@ -271,7 +390,7 @@ def category_view(
     }
 
 
-@app.get("/api/sessions/{session}/cars/{number}")
+@app.get("/api/sessions/{session:path}/cars/{number}")
 def car_view(
     session: str, number: str, slow: int = Query(DEFAULT_SLOW_PCT, ge=100, le=200)
 ) -> dict:
@@ -319,6 +438,8 @@ def car_view(
                 "lap": int(r.LAP_NUMBER),
                 "stint": int(r.STINT),
                 "stintLap": int(r.STINT_LAP),
+                "session": r.SESSION,
+                "sessionLap": int(r.SESSION_LAP),
                 "driver": r.DRIVER_NAME,
                 **_time(r.LAP_TIME_SECONDS),
                 "s1": r.S1_TEXT,

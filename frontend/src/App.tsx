@@ -43,6 +43,11 @@ const categoryCopy: Record<string, { description: string; badge: string }> = {
       "Evalúa la consistencia de los GT y compara el rendimiento de los pilotos en un mismo coche.",
     badge: "GT3 / GRAN TURISMO",
   },
+  LMP2: {
+    description:
+      "Compara los LMP2: ritmo, regularidad y diferencias entre los pilotos de un mismo coche.",
+    badge: "LMP2 / PROTOTIPOS",
+  },
 }
 const fallbackCopy = {
   description: "Analiza el ritmo de cada coche y la diferencia entre sus pilotos.",
@@ -632,17 +637,31 @@ function markBest(points: Point[]): Point[] {
   return points.map((p) => (p.y === best ? { ...p, best: true } : p))
 }
 
-function lapPoints(data: CarData, pace: boolean, driver?: string): Point[] {
+// En la vista de todas las sesiones, dónde se logró una vuelta: su sesión y su nº de vuelta.
+function where(l: { session: string; sessionLap: number }): string {
+  return `${l.session} · vuelta ${l.sessionLap}`
+}
+
+function lapPoints(data: CarData, pace: boolean, overall: boolean, driver?: string): Point[] {
   return data.laps.flatMap((l) =>
     l.seconds === null || l.isPace !== pace || (driver !== undefined && l.driver !== driver)
       ? []
-      : [{ x: l.lap, y: l.seconds, who: l.driver, note: pace ? undefined : l.status }],
+      : [
+          {
+            x: l.lap,
+            y: l.seconds,
+            who: l.driver,
+            note:
+              [overall ? where(l) : "", pace ? "" : l.status].filter(Boolean).join(" · ") ||
+              undefined,
+          },
+        ],
   )
 }
 
-function excludedSeries(data: CarData, mode: Mode): Series[] {
+function excludedSeries(data: CarData, mode: Mode, overall: boolean): Series[] {
   if (mode !== "todas") return []
-  const points = lapPoints(data, false)
+  const points = lapPoints(data, false, overall)
   if (!points.length) return []
   return [
     {
@@ -656,7 +675,7 @@ function excludedSeries(data: CarData, mode: Mode): Series[] {
   ]
 }
 
-function driverSeries(data: CarData, mode: Mode): Series[] {
+function driverSeries(data: CarData, mode: Mode, overall: boolean): Series[] {
   return [
     ...data.drivers.map((driver, i) => ({
       id: driver.name,
@@ -664,9 +683,9 @@ function driverSeries(data: CarData, mode: Mode): Series[] {
       color: DRIVER_PALETTE[i % DRIVER_PALETTE.length],
       shape: SHAPES[i % SHAPES.length],
       line: true,
-      points: markBest(lapPoints(data, true, driver.name)),
+      points: markBest(lapPoints(data, true, overall, driver.name)),
     })),
-    ...excludedSeries(data, mode),
+    ...excludedSeries(data, mode, overall),
   ]
 }
 
@@ -675,7 +694,7 @@ function driverSeries(data: CarData, mode: Mode): Series[] {
 // identifican al piloto; el trazo, el stint cuando un mismo piloto tiene varios.
 const STINT_DASHES = [undefined, "7 4", "2 4", "10 3 2 3"]
 
-function overlaySeries(data: CarData, mode: Mode): Series[] {
+function overlaySeries(data: CarData, mode: Mode, overall: boolean): Series[] {
   const out: Series[] = []
   data.drivers.forEach((driver, di) => {
     const color = DRIVER_PALETTE[di % DRIVER_PALETTE.length]
@@ -694,7 +713,7 @@ function overlaySeries(data: CarData, mode: Mode): Series[] {
                 x: l.stintLap,
                 y: l.seconds,
                 who: driver.name,
-                note: `Vuelta ${l.lap} de carrera · Stint ${stint}`,
+                note: `${overall ? where(l) : `Vuelta ${l.lap} de carrera`} · Stint ${stint}`,
                 best: l.seconds === bestY,
               },
             ],
@@ -720,7 +739,7 @@ function overlaySeries(data: CarData, mode: Mode): Series[] {
               x: l.stintLap,
               y: l.seconds,
               who: l.driver,
-              note: `Vuelta ${l.lap} de carrera · Stint ${l.stint} · ${l.status}`,
+              note: `${overall ? where(l) : `Vuelta ${l.lap} de carrera`} · Stint ${l.stint} · ${l.status}`,
             },
           ],
     )
@@ -742,7 +761,7 @@ function overlaySeries(data: CarData, mode: Mode): Series[] {
 type Selection = { car: string; slot: number }
 const MAX_COMPARE = 4
 
-function paceSeries(data: CategoryData, picks: Selection[]): Series[] {
+function paceSeries(data: CategoryData, picks: Selection[], overall: boolean): Series[] {
   return picks.flatMap(({ car, slot }) => {
     const item = data.pace.find((p) => p.car === car)
     if (!item) return []
@@ -755,7 +774,9 @@ function paceSeries(data: CategoryData, picks: Selection[]): Series[] {
         line: true,
         points: markBest(
           item.laps.flatMap((l) =>
-            l.seconds === null ? [] : [{ x: l.lap, y: l.seconds, who: l.driver }],
+            l.seconds === null
+              ? []
+              : [{ x: l.lap, y: l.seconds, who: l.driver, note: overall ? where(l) : undefined }],
           ),
         ),
       },
@@ -796,11 +817,13 @@ function Header({
   )
 }
 
-function Footer({ sessionName }: { sessionName?: string }) {
+function Footer({ sessionName, eventName }: { sessionName?: string; eventName?: string }) {
   return (
     <footer>
       <span>
-        {sessionName ? `Datos reales · ${sessionName}` : "Datos reales de sesión"}
+        {sessionName
+          ? `Datos reales · ${eventName ? `${eventName} · ` : ""}${sessionName}`
+          : "Datos reales de sesión"}
       </span>
       <span>WEC · 2026 · BG</span>
     </footer>
@@ -843,22 +866,53 @@ function SessionSelect({
   category?: string // si se indica, solo se pueden elegir sesiones que tengan esa categoría
   categoryLabel?: string
 }) {
+  // Evento (carpeta de datos) y, dentro de él, sesión. Con un solo evento no se muestra el primero.
+  const current = sessions.find((s) => s.id === value)
+  const events = [...new Map(sessions.map((s) => [s.event, s.eventName])).entries()]
+  const has = (s: SessionInfo) =>
+    category === undefined || s.categories === null || s.categories.includes(category)
+
+  function changeEvent(event: string) {
+    const list = sessions.filter((s) => s.event === event)
+    const target = list.find((s) => !s.overall && has(s)) ?? list.find(has) ?? list[0]
+    if (target) onChange(target.id)
+  }
+
   return (
-    <label className={className}>
-      <span className="select-label">Sesión</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {sessions.map((s) => {
-          const unavailable =
-            category !== undefined && s.categories !== null && !s.categories.includes(category)
-          return (
-            <option key={s.id} value={s.id} disabled={unavailable}>
-              {s.name}
-              {unavailable ? ` — sin ${categoryLabel ?? category}` : ""}
-            </option>
-          )
-        })}
-      </select>
-    </label>
+    <>
+      {events.length > 1 && (
+        <label className={className}>
+          <span className="select-label">Evento</span>
+          <select value={current?.event ?? ""} onChange={(event) => changeEvent(event.target.value)}>
+            {events.map(([id, name]) => {
+              const unavailable = !sessions.some((s) => s.event === id && has(s))
+              return (
+                <option key={id} value={id} disabled={unavailable}>
+                  {name}
+                  {unavailable ? ` — sin ${categoryLabel ?? category}` : ""}
+                </option>
+              )
+            })}
+          </select>
+        </label>
+      )}
+      <label className={className}>
+        <span className="select-label">Sesión</span>
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          {sessions
+            .filter((s) => s.event === current?.event)
+            .map((s) => {
+              const unavailable = !has(s)
+              return (
+                <option key={s.id} value={s.id} disabled={unavailable}>
+                  {s.name}
+                  {unavailable ? ` — sin ${categoryLabel ?? category}` : ""}
+                </option>
+              )
+            })}
+        </select>
+      </label>
+    </>
   )
 }
 
@@ -887,12 +941,14 @@ function Landing({
           Selecciona una categoría. Descubre el ritmo de cada coche y lo que
           marca la diferencia entre sus pilotos.
         </p>
-        <SessionSelect
-          className="session-select"
-          sessions={sessions}
-          value={sessionId}
-          onChange={onSession}
-        />
+        <div className="select-group">
+          <SessionSelect
+            className="session-select"
+            sessions={sessions}
+            value={sessionId}
+            onChange={onSession}
+          />
+        </div>
         <div className="category-grid">
           {overview.categories.map((category) => {
             const copy = categoryCopy[category.id] ?? fallbackCopy
@@ -915,6 +971,7 @@ function Landing({
                   <div className="category-stats">
                     {category.cars} coches · {category.drivers} pilotos · mejor
                     vuelta {category.bestLap.text}
+                    {overview.overall ? ` (${category.bestLap.session})` : ""}
                   </div>
                   <button
                     className="primary-button"
@@ -939,12 +996,14 @@ function Landing({
           <div className="event-meta">
             <span>{overview.laps.toLocaleString("es-ES")} vueltas</span>
             <b>
-              {overview.clockStart} – {overview.clockEnd}
+              {overview.overall
+                ? `${overview.sessionCount} sesiones`
+                : `${overview.clockStart} – ${overview.clockEnd}`}
             </b>
           </div>
         </div>
       </main>
-      <Footer sessionName={overview.session.name} />
+      <Footer sessionName={overview.session.name} eventName={overview.session.eventName} />
     </div>
   )
 }
@@ -973,7 +1032,7 @@ function MetricCard({
 }
 
 // Evolución del ritmo de un piloto durante sus stints (vuelta en X, tiempo en Y).
-function StintPanel({ data }: { data: CarData }) {
+function StintPanel({ data, overall }: { data: CarData; overall: boolean }) {
   const [driver, setDriver] = useState(data.drivers[0]?.name ?? "")
   const [showTrend, setShowTrend] = useState(false)
   const [showExcluded, setShowExcluded] = useState(false)
@@ -993,7 +1052,7 @@ function StintPanel({ data }: { data: CarData }) {
               x: l.lap,
               y: l.seconds,
               who: driver,
-              note: `Stint ${l.stint} · vuelta ${l.stintLap} del stint${l.isPace ? "" : ` · ${l.status}`}`,
+              note: `${overall ? `${where(l)} · ` : ""}Stint ${l.stint} · vuelta ${l.stintLap} del stint${l.isPace ? "" : ` · ${l.status}`}`,
             },
           ]
     const out: Series[] = [
@@ -1106,6 +1165,7 @@ function StintPanel({ data }: { data: CarData }) {
           <LineChart
             series={series}
             bands={bands}
+            xLabel={overall ? "Vuelta acumulada" : "Vuelta"}
             label={`Ritmo por vuelta de ${driver} en el coche ${data.car.number}, por stint`}
           />
           <p className="chart-note">
@@ -1157,23 +1217,27 @@ function StintPanel({ data }: { data: CarData }) {
 function Dashboard({
   sessionId,
   sessionName,
+  eventName,
   sessions,
   onSession,
   slow,
   onSlow,
   category,
   categories,
+  overall,
   onCategory,
   onHome,
 }: {
   sessionId: string
   sessionName: string
+  eventName: string
   sessions: SessionInfo[]
   onSession: (id: string) => void
   slow: number
   onSlow: (pct: number) => void
   category: string
   categories: { id: string; label: string }[]
+  overall: boolean // datos de todas las sesiones juntas
   onCategory: (category: string) => void
   onHome: () => void
 }) {
@@ -1210,13 +1274,17 @@ function Dashboard({
       : data.rankings.lap.slice(0, MAX_COMPARE).map((r, slot) => ({ car: r.car, slot }))
   }, [cat.data, compare])
   const paceChartSeries = useMemo<Series[]>(
-    () => (cat.data ? paceSeries(cat.data, activeCompare) : []),
-    [cat.data, activeCompare],
+    () => (cat.data ? paceSeries(cat.data, activeCompare, overall) : []),
+    [cat.data, activeCompare, overall],
   )
   const compareSeries = useMemo(
     () =>
-      car.data ? (overlay ? overlaySeries(car.data, mode) : driverSeries(car.data, mode)) : [],
-    [car.data, mode, overlay],
+      car.data
+        ? overlay
+          ? overlaySeries(car.data, mode, overall)
+          : driverSeries(car.data, mode, overall)
+        : [],
+    [car.data, mode, overlay, overall],
   )
 
   if (cat.error) return <Status title="No se pudieron cargar los datos" detail={cat.error} />
@@ -1359,10 +1427,10 @@ function Dashboard({
           {data.bests.map((best) => (
             <MetricCard
               key={best.key}
-              label={`${best.label} de la categoría`}
+              label={`${best.label} ${overall ? "overall" : "de la categoría"}`}
               value={best.text}
               note={`#${best.car} · ${best.driver}`}
-              detail={`${best.team} · vuelta ${best.lap} · ${best.clock} (sesión ${best.elapsed})`}
+              detail={`${best.team} · ${overall ? `${best.session} · ` : ""}vuelta ${best.lap} · ${best.clock} (sesión ${best.elapsed})`}
               accent={best.key === "lap"}
             />
           ))}
@@ -1384,6 +1452,7 @@ function Dashboard({
             <LineChart
               series={paceChartSeries}
               interactiveY
+              xLabel={overall ? "Vuelta acumulada" : "Vuelta"}
               resetKey={`${category}|${activeCompare.map((c) => c.car).join(",")}`}
               label="Tiempo por vuelta de los coches seleccionados de la categoría"
             />
@@ -1443,7 +1512,7 @@ function Dashboard({
                       )}
                       #{row.car} {row.team}
                       <small>
-                        {row.driver} · vuelta {row.lap}
+                        {row.driver} · {overall ? `${row.session} · ` : ""}vuelta {row.lap}
                       </small>
                     </span>
                     <strong>{row.text}</strong>
@@ -1540,7 +1609,7 @@ function Dashboard({
                       <Legend series={compareSeries} />
                       <LineChart
                         series={compareSeries}
-                        xLabel={overlay ? "Vuelta del stint" : "Vuelta"}
+                        xLabel={overlay ? "Vuelta del stint" : overall ? "Vuelta acumulada" : "Vuelta"}
                         label={`Tiempo por vuelta de los pilotos del coche ${car.data.car.number}${overlay ? ", superpuestos por vuelta del stint" : ""}`}
                       />
                     </div>
@@ -1613,6 +1682,7 @@ function Dashboard({
                     <table>
                       <thead>
                         <tr>
+                          {overall && <th scope="col">Sesión</th>}
                           <th scope="col">Vuelta</th>
                           <th scope="col">Piloto</th>
                           <th scope="col">Tiempo</th>
@@ -1626,7 +1696,8 @@ function Dashboard({
                       <tbody>
                         {car.data.laps.map((lap) => (
                           <tr key={lap.lap}>
-                            <td>{lap.lap}</td>
+                            {overall && <td>{lap.session}</td>}
+                            <td>{overall ? lap.sessionLap : lap.lap}</td>
                             <td>{lap.driver}</td>
                             <td>{lap.text}</td>
                             <td>{lap.s1}</td>
@@ -1645,9 +1716,9 @@ function Dashboard({
           </article>
         </section>
 
-        {car.data && <StintPanel key={car.data.car.number} data={car.data} />}
+        {car.data && <StintPanel key={car.data.car.number} data={car.data} overall={overall} />}
       </main>
-      <Footer sessionName={sessionName} />
+      <Footer sessionName={sessionName} eventName={eventName} />
     </div>
   )
 }
@@ -1665,7 +1736,14 @@ export default function App() {
     if (!boot.data) return
     setMsSeparator(boot.data.settings.msSeparator)
     setSlow(boot.data.settings.slowThresholdPct)
-    setSessionId((current) => current ?? boot.data?.sessions[0]?.id ?? null)
+    // por defecto, una sesión real (la de "todas las sesiones" se elige a propósito)
+    setSessionId(
+      (current) =>
+        current ??
+        boot.data?.sessions.find((s) => !s.overall)?.id ??
+        boot.data?.sessions[0]?.id ??
+        null,
+    )
   }, [boot.data])
 
   const overview = useApi(sessionId ? () => api.overview(sessionId) : null, [sessionId])
@@ -1699,12 +1777,14 @@ export default function App() {
     <Dashboard
       sessionId={sessionId}
       sessionName={overview.data.session.name}
+      eventName={overview.data.session.eventName}
       sessions={boot.data.sessions}
       onSession={setSessionId}
       slow={slow}
       onSlow={setSlow}
       category={category}
       categories={overview.data.categories}
+      overall={overview.data.overall}
       onCategory={setCategory}
       onHome={() => setCategory(null)}
     />

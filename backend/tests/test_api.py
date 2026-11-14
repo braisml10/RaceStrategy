@@ -18,9 +18,11 @@ def client(tmp_path, monkeypatch):
 
 def test_sessions_and_settings(client):
     body = client.get("/api/sessions").json()
-    assert body["sessions"] == [
-        {"id": "FP1.csv", "name": "FP1", "categories": ["HYPERCAR", "LMGT3"]}
-    ]
+    assert len(body["sessions"]) == 1      # con un solo archivo no hay "todas las sesiones"
+    assert body["sessions"][0] | {"eventName": ""} == {
+        "id": "FP1.csv", "name": "FP1", "overall": False, "event": ".", "eventName": "",
+        "categories": ["HYPERCAR", "LMGT3"],
+    }
     assert body["settings"] == {"msSeparator": ".", "slowThresholdPct": 107}
 
 
@@ -28,7 +30,10 @@ def test_sessions_list_their_categories(client, tmp_path):
     write_session(tmp_path / "GT3.csv", [SESSION_ROWS[10], SESSION_ROWS[11]])  # solo el #99 (LMGT3)
     (tmp_path / "BAD.csv").write_text("A;B\n1;2\n")                           # sin columna CLASS
     cats = {s["id"]: s["categories"] for s in client.get("/api/sessions").json()["sessions"]}
-    assert cats == {"BAD.csv": None, "FP1.csv": ["HYPERCAR", "LMGT3"], "GT3.csv": ["LMGT3"]}
+    assert cats == {
+        "BAD.csv": None, "FP1.csv": ["HYPERCAR", "LMGT3"], "GT3.csv": ["LMGT3"],
+        "__all__": None,                  # una sesión ilegible: no se sabe qué trae el conjunto
+    }
 
 
 def test_overview(client):
@@ -48,6 +53,7 @@ def test_category(client):
     assert [b["key"] for b in body["bests"]] == ["lap", "s1", "s2", "s3"]
     lap = body["bests"][0]
     assert (lap["car"], lap["driver"], lap["lap"], lap["clock"]) == ("7", "Carl C", 2, "11:33:33")
+    assert lap["session"] == "FP1"
     ranking = body["rankings"]["lap"]
     assert [r["car"] for r in ranking] == ["7", "007"]
     assert ranking[0]["gapText"] == "—" and ranking[1]["gapText"] == "+1.000"
@@ -123,6 +129,60 @@ def test_repeated_laps_are_reported(client, tmp_path):
     assert "vueltas repetidas" in reply.json()["detail"]
 
 
+def _two_sessions(tmp_path):
+    """FP2: el #7 mejora su vuelta (92.0) y sus sectores 1 y 3; el #99 va más lento."""
+    pace = lambda s, d: (s, d, None, False, "GF")  # noqa: E731
+    first = (120.0, "Carl C", None, False, "GF")
+    write_session(tmp_path / "FP2.csv",
+                  car_rows("7", [first, pace(92.0, "Carl C"), pace(93.0, "Carl C")], team="Toyota")
+                  + car_rows("99", [(130.0, "Dan D", None, False, "GF"), pace(102.0, "Dan D")],
+                             category="LMGT3", team="Ford"))
+
+
+def test_overall_session_joins_all_sessions(client, tmp_path):
+    _two_sessions(tmp_path)
+    listing = client.get("/api/sessions").json()["sessions"]
+    assert [s["id"] for s in listing] == ["FP1.csv", "FP2.csv", "__all__"]
+    last = listing[-1]
+    assert (last["id"], last["name"], last["overall"], last["event"]) == (
+        "__all__", "Todas las sesiones", True, ".")
+    assert last["categories"] == ["HYPERCAR", "LMGT3"]
+
+    ov = client.get("/api/sessions/__all__/overview").json()
+    assert (ov["overall"], ov["sessionCount"], ov["laps"], ov["cars"]) == (True, 2, 17, 3)
+    assert ov["session"]["name"] == "Todas las sesiones" and ov["clockStart"] == ""
+    hyper = ov["categories"][0]
+    assert hyper["bestLap"]["text"] == "01:32.000" and hyper["bestLap"]["session"] == "FP2"
+
+    bests = {b["key"]: b for b in client.get("/api/sessions/__all__/categories/HYPERCAR").json()["bests"]}
+    assert (bests["lap"]["car"], bests["lap"]["session"], bests["lap"]["lap"]) == ("7", "FP2", 2)
+    assert bests["s1"]["session"] == "FP2" and bests["s3"]["session"] == "FP2"
+    assert bests["s2"]["session"] == "FP1"          # el mejor sector 2 es de la FP1
+    gt3 = client.get("/api/sessions/__all__/categories/LMGT3").json()
+    assert gt3["bests"][0]["session"] == "FP1"      # 101.5 (FP1) mejora a 102.0 (FP2)
+    ranking = client.get("/api/sessions/__all__/categories/HYPERCAR").json()["rankings"]["lap"]
+    assert [(r["car"], r["session"]) for r in ranking] == [("7", "FP2"), ("007", "FP1")]
+
+
+def test_overall_laps_are_accumulated_per_car(client, tmp_path):
+    _two_sessions(tmp_path)
+    car = client.get("/api/sessions/__all__/cars/7").json()
+    assert [(l["lap"], l["session"], l["sessionLap"]) for l in car["laps"]] == [
+        (1, "FP1", 1), (2, "FP1", 2), (3, "FP2", 1), (4, "FP2", 2), (5, "FP2", 3),
+    ]
+    # la primera vuelta de cada sesión es de salida: arranca un stint nuevo
+    assert [(s["stint"], s["startLap"], s["endLap"]) for s in car["stints"]] == [(1, 1, 2), (2, 3, 5)]
+    pace = client.get("/api/sessions/__all__/categories/HYPERCAR").json()["pace"][0]
+    assert [(p["lap"], p["session"], p["sessionLap"]) for p in pace["laps"]] == [
+        (2, "FP1", 2), (4, "FP2", 2), (5, "FP2", 3),
+    ]
+    assert client.get("/api/sessions/FP2.csv/cars/7").json()["laps"][0]["session"] == "FP2"
+
+
+def test_overall_needs_more_than_one_file(client):
+    assert client.get("/api/sessions/__all__/overview").status_code == 404
+
+
 def test_errors(client):
     assert client.get("/api/sessions/nope.csv/overview").status_code == 404
     assert client.get("/api/sessions/..%2Fsecret.csv/overview").status_code == 404
@@ -134,3 +194,58 @@ def test_errors(client):
 def test_cors_allows_the_vite_origin(client):
     reply = client.get("/api/sessions", headers={"Origin": "http://localhost:5173"})
     assert reply.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+@pytest.fixture()
+def events_client(tmp_path, monkeypatch):
+    """Dos eventos en subcarpetas: WEC/2026/Barcelona (2 sesiones) y ALMS/paul-ricard (2 sesiones LMP2)."""
+    pace = lambda s, d: (s, d, None, False, "GF")  # noqa: E731
+    out = (120.0, "Ann", None, False, "GF")
+    for folder in ("WEC/2026/Barcelona", "ALMS/paul-ricard"):
+        (tmp_path / folder).mkdir(parents=True)
+    write_session(tmp_path / "WEC/2026/Barcelona/FP1.csv", SESSION_ROWS)
+    write_session(tmp_path / "WEC/2026/Barcelona/FP2.csv", SESSION_ROWS)
+    lmp2_1 = car_rows("5", [out, pace(98.0, "Ann"), pace(98.5, "Ann")], category="LMP2", team="Oreca A")
+    lmp2_1 += car_rows("6", [out, pace(99.0, "Bob"), pace(99.5, "Bob")], category="LMP2", team="Oreca B")
+    lmp2_2 = car_rows("5", [out, pace(97.5, "Ann"), pace(98.0, "Ann")], category="LMP2", team="Oreca A")
+    write_session(tmp_path / "ALMS/paul-ricard/R1.csv", lmp2_1)
+    write_session(tmp_path / "ALMS/paul-ricard/R2.csv", lmp2_2)
+    (tmp_path / "ALMS/paul-ricard/~$R1.csv").write_text("temporal de Excel")   # debe ignorarse
+    monkeypatch.setattr(api, "DATA_DIR", tmp_path)
+    api._load.cache_clear()
+    api._marked.cache_clear()
+    api._overall.cache_clear()
+    return TestClient(api.app)
+
+
+def test_events_in_subfolders(events_client):
+    sessions = events_client.get("/api/sessions").json()["sessions"]
+    assert [s["id"] for s in sessions] == [
+        "ALMS/paul-ricard/R1.csv", "ALMS/paul-ricard/R2.csv", "ALMS/paul-ricard/__all__",
+        "WEC/2026/Barcelona/FP1.csv", "WEC/2026/Barcelona/FP2.csv", "WEC/2026/Barcelona/__all__",
+    ]
+    alms, wec = sessions[0], sessions[3]
+    assert (alms["event"], alms["eventName"], alms["categories"]) == ("ALMS/paul-ricard", "ALMS · Paul Ricard", ["LMP2"])
+    assert (wec["event"], wec["eventName"]) == ("WEC/2026/Barcelona", "WEC · 2026 · Barcelona")
+    assert sessions[2]["categories"] == ["LMP2"] and sessions[2]["overall"] is True
+
+
+def test_lmp2_session_in_a_subfolder(events_client):
+    ov = events_client.get("/api/sessions/ALMS/paul-ricard/R1.csv/overview").json()
+    assert [(c["id"], c["label"], c["cars"]) for c in ov["categories"]] == [("LMP2", "LMP2", 2)]
+    assert ov["session"]["eventName"] == "ALMS · Paul Ricard"
+    cat = events_client.get("/api/sessions/ALMS/paul-ricard/R1.csv/categories/LMP2").json()
+    assert [r["car"] for r in cat["rankings"]["lap"]] == ["5", "6"]
+    assert cat["bests"][0]["text"] == "01:38.000"
+    car = events_client.get("/api/sessions/ALMS/paul-ricard/R1.csv/cars/5").json()
+    assert car["car"]["category"] == "LMP2" and len(car["laps"]) == 3
+
+
+def test_overall_only_joins_its_own_event(events_client):
+    ov = events_client.get("/api/sessions/ALMS/paul-ricard/__all__/overview").json()
+    assert (ov["overall"], ov["sessionCount"], ov["cars"], ov["laps"]) == (True, 2, 2, 9)
+    assert ov["session"]["event"] == "ALMS/paul-ricard"
+    best = events_client.get("/api/sessions/ALMS/paul-ricard/__all__/categories/LMP2").json()["bests"][0]
+    assert (best["text"], best["session"], best["car"]) == ("01:37.500", "R2", "5")
+    wec = events_client.get("/api/sessions/WEC/2026/Barcelona/__all__/overview").json()
+    assert [c["id"] for c in wec["categories"]] == ["HYPERCAR", "LMGT3"]

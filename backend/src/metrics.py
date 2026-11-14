@@ -72,8 +72,9 @@ def session_bests(df: pd.DataFrame) -> pd.DataFrame:
                 "TIME": best[column],
                 "CAR": best["NUMBER"],
                 "TEAM": best["TEAM"] if "TEAM" in best else "",
+                "SESSION": best["SESSION"] if "SESSION" in best else "",
                 "DRIVER": best["DRIVER_NAME"],
-                "LAP": int(best["LAP_NUMBER"]),
+                "LAP": int(best["SESSION_LAP"] if "SESSION_LAP" in best else best["LAP_NUMBER"]),
                 "CLOCK": best["HOUR_SECONDS"],
                 "ELAPSED": best["ELAPSED_SECONDS"],
             }
@@ -95,8 +96,9 @@ def ranking_by_metric(df: pd.DataFrame, column: str = "LAP_TIME_SECONDS") -> pd.
             "TEAM": best["TEAM"].to_numpy() if "TEAM" in best else "",
             "DRIVER": best["DRIVER_NAME"].to_numpy(),
             "TIME": best[column].to_numpy(),
-            "LAP": best["LAP_NUMBER"].astype(int).to_numpy(),
+            "LAP": best["SESSION_LAP" if "SESSION_LAP" in best else "LAP_NUMBER"].astype(int).to_numpy(),
             "CLOCK": best["HOUR_SECONDS"].to_numpy(),
+            "SESSION": best["SESSION"].to_numpy() if "SESSION" in best else "",
         }
     ).sort_values("TIME", kind="stable").reset_index(drop=True)
     ranking.insert(0, "POSITION", range(1, len(ranking) + 1))

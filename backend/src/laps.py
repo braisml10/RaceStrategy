@@ -162,4 +162,7 @@ def lap_series(car_df: pd.DataFrame, pace_only: bool = False) -> pd.DataFrame:
     if "STINT" in laps.columns:  # tras mark_stints
         series["STINT"] = laps["STINT"].astype(int).to_numpy()
         series["STINT_LAP"] = laps["STINT_LAP"].astype(int).to_numpy()
+    if "SESSION" in laps.columns:  # datos de una o varias sesiones
+        series["SESSION"] = laps["SESSION"].to_numpy()
+        series["SESSION_LAP"] = laps["SESSION_LAP"].astype(int).to_numpy()
     return series

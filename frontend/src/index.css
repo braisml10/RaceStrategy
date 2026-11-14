@@ -972,3 +972,7 @@ summary:focus-visible,
 
 /* ---- Superponer pilotos ---- */
 .overlay-toggle { margin: 12px 0 2px; }
+
+/* ---- Evento + sesión ---- */
+.select-group { display: flex; flex-wrap: wrap; gap: 16px; margin: -14px 0 24px; }
+.select-group .session-select { margin: 0; }

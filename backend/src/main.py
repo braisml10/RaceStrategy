@@ -60,7 +60,10 @@ def main() -> None:
     if args.file:
         files = [Path(args.file)]
     else:
-        files = sorted(p for p in DATA_DIR.glob("*") if p.suffix.lower() in SUPPORTED_EXTENSIONS)
+        files = sorted(
+            p for p in DATA_DIR.rglob("*")
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS and not p.name.startswith(("~$", "."))
+        )
         if not files:
             raise SystemExit(f"No hay archivos CSV/Excel en {DATA_DIR}")
 

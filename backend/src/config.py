@@ -22,11 +22,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Carpeta con los CSV/Excel. Se puede cambiar sin tocar código:
+# Carpeta raíz de los datos. Cada subcarpeta con CSV/Excel es un "evento"
+# (p. ej. WEC/2026/Barcelona o ALMS/paul-ricard) y cada archivo, una sesión.
+# Se puede cambiar sin tocar código:
 #   WEC_DATA_DIR=/otra/carpeta uvicorn api:app
-DATA_DIR = Path(
-    os.environ.get("WEC_DATA_DIR", PROJECT_ROOT / "data" / "raw" / "WEC" / "2026" / "Barcelona")
-)
+DATA_DIR = Path(os.environ.get("WEC_DATA_DIR", PROJECT_ROOT / "data" / "raw"))
 
 CATEGORY_LABELS = {"HYPERCAR": "Hypercar", "LMP2": "LMP2", "LMGT3": "LMGT3"}
 

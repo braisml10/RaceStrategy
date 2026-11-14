@@ -12,7 +12,16 @@ export type TimeValue = { seconds: number | null; text: string }
 
 export type Settings = { msSeparator: string; slowThresholdPct: number }
 // categories: las categorías que trae el archivo (null si no se pudo determinar)
-export type SessionInfo = { id: string; name: string; categories: string[] | null }
+// overall: la sesión virtual que junta todas las sesiones
+// event: carpeta de datos a la que pertenece (p. ej. "ALMS/paul-ricard"); eventName: su nombre legible
+export type SessionInfo = {
+  id: string
+  name: string
+  overall: boolean
+  event: string
+  eventName: string
+  categories: string[] | null
+}
 export type SessionsResponse = {
   sessions: SessionInfo[]
   settings: Settings
@@ -24,6 +33,7 @@ export type Best = TimeValue & {
   label: string
   car: string
   team: string
+  session: string
   driver: string
   lap: number
   clock: string
@@ -39,7 +49,9 @@ export type CategorySummary = {
   bestLap: Best
 }
 export type Overview = {
-  session: SessionInfo
+  session: { id: string; name: string; event: string; eventName: string }
+  overall: boolean
+  sessionCount: number
   laps: number
   cars: number
   drivers: number
@@ -53,6 +65,7 @@ export type RankingRow = TimeValue & {
   car: string
   team: string
   driver: string
+  session: string
   gapText: string
   lap: number
   clock: string
@@ -60,7 +73,7 @@ export type RankingRow = TimeValue & {
 export type CarPace = {
   car: string
   team: string
-  laps: { lap: number; seconds: number | null; driver: string }[]
+  laps: { lap: number; seconds: number | null; driver: string; session: string; sessionLap: number }[]
 }
 export type CarOption = {
   number: string
@@ -90,9 +103,11 @@ export type DriverRow = {
   deltaText: string
 }
 export type CarLap = TimeValue & {
-  lap: number
+  lap: number // en "todas las sesiones", vuelta acumulada del coche
   stint: number
   stintLap: number
+  session: string
+  sessionLap: number // vuelta dentro de su sesión
   driver: string
   s1: string
   s2: string
@@ -178,17 +193,19 @@ async function get<T>(path: string): Promise<T> {
 }
 
 const enc = encodeURIComponent
+// El id de sesión es una ruta ("WEC/2026/Barcelona/FP1.CSV"): se codifica cada tramo.
+const encPath = (path: string) => path.split("/").map(enc).join("/")
 
 export const api = {
   sessions: () => get<SessionsResponse>("/api/sessions"),
   overview: (session: string) =>
-    get<Overview>(`/api/sessions/${enc(session)}/overview`),
+    get<Overview>(`/api/sessions/${encPath(session)}/overview`),
   category: (session: string, category: string, slow: number) =>
     get<CategoryData>(
-      `/api/sessions/${enc(session)}/categories/${enc(category)}?slow=${slow}`,
+      `/api/sessions/${encPath(session)}/categories/${enc(category)}?slow=${slow}`,
     ),
   car: (session: string, number: string, slow: number) =>
-    get<CarData>(`/api/sessions/${enc(session)}/cars/${enc(number)}?slow=${slow}`),
+    get<CarData>(`/api/sessions/${encPath(session)}/cars/${enc(number)}?slow=${slow}`),
 }
 
 // ---------------------------------------------------------------------------
