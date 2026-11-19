@@ -114,6 +114,8 @@ export type CarLap = TimeValue & {
   s3: string
   clock: string
   status: string
+  flag: string // bandera al cruzar la meta (FCY, VSC, SC, RF...); "" si fue una vuelta normal
+  pit: "in" | "out" | "" // entrada o salida de boxes
   isPace: boolean
 }
 export type StintRow = {

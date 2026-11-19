@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from config import (
-    CATEGORY_ORDER, MS_SEPARATOR, NEUTRALISED_FLAGS, PACE_STATUS, SLOW_LAP_THRESHOLD,
+    CATEGORY_ORDER, MS_SEPARATOR, NORMAL_FLAGS, PACE_STATUS, SLOW_LAP_THRESHOLD,
 )
 
 
@@ -95,16 +95,20 @@ def _text_column(df: pd.DataFrame, name: str) -> pd.Series:
 def mark_pace_laps(
     df: pd.DataFrame, slow_threshold: float = SLOW_LAP_THRESHOLD
 ) -> pd.DataFrame:
-    """Añade IS_IN_LAP, IS_OUT_LAP, LAP_STATUS e IS_PACE_LAP.
+    """Añade IS_IN_LAP, IS_OUT_LAP, FLAG, IS_FLAG_LAP, LAP_STATUS e IS_PACE_LAP.
 
     Una vuelta NO es de ritmo si es:
+      - bajo bandera: FLAG_AT_FL distinto de verde/final (FCY, VSC, SC, RF...),
       - entrada a boxes (marcada con 'B'),
       - salida de boxes (la siguiente a una entrada, la que lleva PIT_TIME,
         o la primera vuelta del coche),
-      - con bandera FCY/SC/RF al cruzar la meta,
       - más lenta que `slow_threshold` x la mejor vuelta del coche
         (atrapa zonas lentas, tráfico extremo, errores...).
-    Si se cumplen varias, LAP_STATUS recoge la primera de esa lista.
+    Si se cumplen varias, LAP_STATUS recoge la primera de esa lista: la bandera va
+    antes que boxes (se para mucho bajo FCY) y antes que "lenta", para distinguir
+    las vueltas lentas de verdad de las que se dan bajo bandera. Las columnas
+    IS_IN_LAP / IS_OUT_LAP se conservan aunque la vuelta tenga bandera.
+    FLAG guarda el código de la bandera ("" si la vuelta es normal).
     """
     df = df.sort_values(["NUMBER", "LAP_NUMBER"]).copy()
     car = df["NUMBER"]
@@ -114,7 +118,8 @@ def mark_pace_laps(
     first_lap = df["LAP_NUMBER"].eq(df.groupby("NUMBER")["LAP_NUMBER"].transform("min"))
     after_in_lap = in_lap.groupby(car).shift(1, fill_value=False).astype(bool)
     out_lap = after_in_lap | has_pit_time | first_lap
-    neutralised = _text_column(df, "FLAG_AT_FL").isin(NEUTRALISED_FLAGS).astype(bool)
+    flag = _text_column(df, "FLAG_AT_FL").fillna("").str.strip().str.upper()
+    is_flag = ~flag.isin(NORMAL_FLAGS | {""})
 
     best_of_car = df.groupby("NUMBER")["LAP_TIME_SECONDS"].transform("min")
     slow = df["LAP_TIME_SECONDS"] > slow_threshold * best_of_car
@@ -122,9 +127,16 @@ def mark_pace_laps(
     pct = round(slow_threshold * 100)
     df["IS_IN_LAP"] = in_lap
     df["IS_OUT_LAP"] = out_lap
+    df["FLAG"] = flag.where(is_flag, "").astype(str)
+    df["IS_FLAG_LAP"] = is_flag.astype(bool)
     df["LAP_STATUS"] = np.select(
-        [in_lap, out_lap, neutralised, slow],
-        ["Entrada a boxes", "Salida de boxes", "Bandera FCY", f"Lenta (>{pct} % de la mejor)"],
+        [is_flag, in_lap, out_lap, slow],
+        [
+            ("Bandera " + flag).to_numpy(dtype=object),
+            "Entrada a boxes",
+            "Salida de boxes",
+            f"Lenta (>{pct} % de la mejor)",
+        ],
         default=PACE_STATUS,
     )
     df["IS_PACE_LAP"] = df["LAP_STATUS"].eq(PACE_STATUS)
@@ -156,6 +168,9 @@ def lap_series(car_df: pd.DataFrame, pace_only: bool = False) -> pd.DataFrame:
             "S3_TEXT": laps["S3_SECONDS"].map(format_lap_time),
             "CLOCK_TEXT": laps["HOUR_SECONDS"].map(format_hms),
             "LAP_STATUS": laps["LAP_STATUS"],
+            "FLAG": laps["FLAG"],
+            "IS_IN_LAP": laps["IS_IN_LAP"],
+            "IS_OUT_LAP": laps["IS_OUT_LAP"],
             "IS_PACE_LAP": laps["IS_PACE_LAP"],
         }
     ).reset_index(drop=True)

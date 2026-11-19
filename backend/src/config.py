@@ -6,9 +6,9 @@ MS_SEPARATOR = "."
 # Una vuelta es "lenta" si supera este múltiplo de la mejor del coche.
 SLOW_LAP_THRESHOLD = 1.07
 
-# Banderas al cruzar la meta que indican vuelta neutralizada.
-# (FF = bandera final: la vuelta es normal y NO se excluye.)
-NEUTRALISED_FLAGS = {"FCY", "SC", "RF"}
+# Valores de FLAG_AT_FL que significan "vuelta normal": GF = bandera verde, FF = bandera
+# final. CUALQUIER otro valor (FCY, VSC, SC, RF...) es una vuelta bajo bandera.
+NORMAL_FLAGS = {"GF", "FF", "CF", "GREEN"}
 
 PACE_STATUS = "Vuelta de ritmo"
 

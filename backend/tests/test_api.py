@@ -84,6 +84,8 @@ def test_car(client):
     assert len(body["laps"]) == 8
     lap5 = body["laps"][4]
     assert lap5["status"] == "Salida de boxes" and not lap5["isPace"] and lap5["text"] == "03:00.000"
+    assert [l["flag"] for l in body["laps"]] == ["", "", "", "", "", "", "FCY", ""]
+    assert [l["pit"] for l in body["laps"]] == ["out", "", "", "in", "out", "", "", ""]
 
 
 def test_car_stints_and_trend(client, tmp_path):

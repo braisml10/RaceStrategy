@@ -65,7 +65,7 @@ const SLOW_OPTIONS = [105, 107, 110, 115, 120]
 
 // Color + forma: la forma identifica la serie aunque no se distingan los colores.
 const PALETTE = ["#2F80FF", "#42D6FF", "#9D86FF", "#7B91AD", "#FFB454", "#5BD19F"]
-type Shape = "circle" | "diamond" | "square" | "triangle" | "cross"
+type Shape = "circle" | "diamond" | "square" | "triangle" | "cross" | "ring"
 const SHAPES: Shape[] = ["circle", "diamond", "square", "triangle", "circle", "diamond"]
 const DRIVER_PALETTE = ["#D4F25C", "#5FD3E8", "#B79CFF", "#FFB454", "#5BD19F", "#FF8FA3"]
 const EXCLUDED_COLOR = "#8392A5"
@@ -174,6 +174,8 @@ function Marker({
   color: string
 }) {
   const common = { fill: color, stroke: "#0d1621", strokeWidth: 1 }
+  if (shape === "ring")
+    return <circle cx={x} cy={y} r={r * 1.15} fill="none" stroke={color} strokeWidth={2} />
   if (shape === "diamond")
     return (
       <polygon
@@ -659,20 +661,78 @@ function lapPoints(data: CarData, pace: boolean, overall: boolean, driver?: stri
   )
 }
 
+// Vueltas excluidas del ritmo, separadas por motivo para no confundirlas:
+//  - bajo bandera (FCY, VSC, SC, RF...): el color y la forma de su bandera,
+//  - entrada o salida de boxes: un anillo gris azulado,
+//  - lentas de verdad (sin bandera): una cruz gris.
+const FLAG_INFO: Record<string, { name: string; color: string; shape: Shape }> = {
+  FCY: { name: "Full Course Yellow", color: "#FFD60A", shape: "diamond" },
+  VSC: { name: "Virtual Safety Car", color: "#FF9F1C", shape: "triangle" },
+  SC: { name: "Safety Car", color: "#FF6B35", shape: "square" },
+  RF: { name: "Bandera roja", color: "#FF3B3B", shape: "circle" },
+}
+const PIT_STYLE = { color: "#7B91AD", shape: "ring" as Shape }
+
+function flagInfo(code: string): { name: string; color: string; shape: Shape } {
+  return FLAG_INFO[code] ?? { name: `Bandera ${code}`, color: "#C084FC", shape: "circle" }
+}
+
+function excludedGroups(
+  laps: CarData["laps"],
+  x: (l: CarData["laps"][number]) => number,
+  context: (l: CarData["laps"][number]) => string[],
+): Series[] {
+  const groups = new Map<string, { label: string; color: string; shape: Shape; points: Point[] }>()
+  for (const l of laps) {
+    if (l.isPace || l.seconds === null) continue
+    let key: string
+    let label: string
+    let style: { color: string; shape: Shape }
+    let reason: string
+    if (l.flag) {
+      const info = flagInfo(l.flag)
+      key = `flag-${l.flag}`
+      label = `${l.flag} · ${info.name}`
+      style = info
+      reason = [`${info.name} (${l.flag})`, l.pit === "in" ? "entrada a boxes" : l.pit === "out" ? "salida de boxes" : ""]
+        .filter(Boolean)
+        .join(" · ")
+    } else if (l.pit) {
+      key = "pit"
+      label = "Entrada / salida de boxes"
+      style = PIT_STYLE
+      reason = l.status
+    } else {
+      key = "slow"
+      label = "Vueltas lentas (sin bandera)"
+      style = { color: EXCLUDED_COLOR, shape: "cross" }
+      reason = l.status
+    }
+    const group = groups.get(key) ?? { label, ...style, points: [] }
+    group.points.push({
+      x: x(l),
+      y: l.seconds,
+      who: l.driver,
+      note: [...context(l), reason].filter(Boolean).join(" · "),
+    })
+    groups.set(key, group)
+  }
+  const order = (key: string) => (key.startsWith("flag-") ? 0 : key === "pit" ? 1 : 2)
+  return [...groups.entries()]
+    .sort(([a], [b]) => order(a) - order(b) || a.localeCompare(b))
+    .map(([key, g]) => ({
+      id: `excluded-${key}`,
+      label: g.label,
+      color: g.color,
+      shape: g.shape,
+      line: false,
+      points: g.points,
+    }))
+}
+
 function excludedSeries(data: CarData, mode: Mode, overall: boolean): Series[] {
   if (mode !== "todas") return []
-  const points = lapPoints(data, false, overall)
-  if (!points.length) return []
-  return [
-    {
-      id: "excluded",
-      label: "Vueltas excluidas (boxes, FCY, lentas)",
-      color: EXCLUDED_COLOR,
-      shape: "cross",
-      line: false,
-      points,
-    },
-  ]
+  return excludedGroups(data.laps, (l) => l.lap, (l) => (overall ? [where(l)] : []))
 }
 
 function driverSeries(data: CarData, mode: Mode, overall: boolean): Series[] {
@@ -730,29 +790,14 @@ function overlaySeries(data: CarData, mode: Mode, overall: boolean): Series[] {
       })
     })
   })
-  if (mode === "todas") {
-    const points: Point[] = data.laps.flatMap((l) =>
-      l.isPace || l.seconds === null
-        ? []
-        : [
-            {
-              x: l.stintLap,
-              y: l.seconds,
-              who: l.driver,
-              note: `${overall ? where(l) : `Vuelta ${l.lap} de carrera`} · Stint ${l.stint} · ${l.status}`,
-            },
-          ],
+  if (mode === "todas")
+    out.push(
+      ...excludedGroups(
+        data.laps,
+        (l) => l.stintLap,
+        (l) => [overall ? where(l) : `Vuelta ${l.lap} de carrera`, `Stint ${l.stint}`],
+      ),
     )
-    if (points.length)
-      out.push({
-        id: "excluded",
-        label: "Vueltas excluidas (boxes, FCY, lentas)",
-        color: EXCLUDED_COLOR,
-        shape: "cross",
-        line: false,
-        points,
-      })
-  }
   return out
 }
 
@@ -1088,19 +1133,14 @@ function StintPanel({ data, overall }: { data: CarData; overall: boolean }) {
         })
       }
     }
-    if (showExcluded) {
-      const excluded = laps.filter((l) => !l.isPace).flatMap(toPoint)
-      if (excluded.length) {
-        out.push({
-          id: "excluded",
-          label: "Vueltas excluidas (boxes, FCY, lentas)",
-          color: EXCLUDED_COLOR,
-          shape: "cross",
-          line: false,
-          points: excluded,
-        })
-      }
-    }
+    if (showExcluded)
+      out.push(
+        ...excludedGroups(
+          laps,
+          (l) => l.lap,
+          (l) => [overall ? where(l) : "", `Stint ${l.stint} · vuelta ${l.stintLap} del stint`],
+        ),
+      )
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, driver, showTrend, showExcluded])
@@ -1613,6 +1653,13 @@ function Dashboard({
                         label={`Tiempo por vuelta de los pilotos del coche ${car.data.car.number}${overlay ? ", superpuestos por vuelta del stint" : ""}`}
                       />
                     </div>
+                    {mode === "todas" && (
+                      <p className="chart-note">
+                        Las vueltas bajo bandera llevan el color y la forma de su bandera (la
+                        bandera es la que había al cruzar la meta). El anillo gris azulado marca
+                        las de boxes y las cruces grises, las lentas sin bandera.
+                      </p>
+                    )}
                     <p className="chart-note">
                       {overlay
                         ? "Cada stint empieza en la vuelta 1 (salida de boxes) para ver los ritmos de los pilotos unos encima de otros. Si un piloto tiene varios stints, se distinguen por el trazo. El círculo blanco marca la mejor vuelta de cada piloto."

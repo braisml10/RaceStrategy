@@ -447,6 +447,8 @@ def car_view(
                 "s3": r.S3_TEXT,
                 "clock": r.CLOCK_TEXT,
                 "status": r.LAP_STATUS,
+                "flag": r.FLAG,
+                "pit": "in" if r.IS_IN_LAP else "out" if r.IS_OUT_LAP else "",
                 "isPace": bool(r.IS_PACE_LAP),
             }
             for r in series.itertuples()
