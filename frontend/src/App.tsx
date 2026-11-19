@@ -18,6 +18,7 @@ import {
   type CategoryData,
   type Metric,
   type Overview,
+  type PitStop,
   type RankingRow,
   type SessionInfo,
 } from "./api"
@@ -69,6 +70,7 @@ type Shape = "circle" | "diamond" | "square" | "triangle" | "cross" | "ring"
 const SHAPES: Shape[] = ["circle", "diamond", "square", "triangle", "circle", "diamond"]
 const DRIVER_PALETTE = ["#D4F25C", "#5FD3E8", "#B79CFF", "#FFB454", "#5BD19F", "#FF8FA3"]
 const EXCLUDED_COLOR = "#8392A5"
+const PIT_LINE_COLOR = "#E6EDF5"
 
 type Mode = "ritmo" | "todas"
 
@@ -202,7 +204,7 @@ function Marker({
   return <circle {...common} cx={x} cy={y} r={r} />
 }
 
-function Legend({ series }: { series: Series[] }) {
+function Legend({ series, pit = false }: { series: Series[]; pit?: boolean }) {
   return (
     <div className="legend">
       {series.map((s) => (
@@ -225,6 +227,22 @@ function Legend({ series }: { series: Series[] }) {
           {s.label}
         </span>
       ))}
+      {pit && (
+        <span>
+          <svg width="24" height="12" viewBox="0 0 24 12" aria-hidden="true">
+            <line
+              x1="12"
+              y1="0"
+              x2="12"
+              y2="12"
+              stroke={PIT_LINE_COLOR}
+              strokeWidth="2"
+              strokeDasharray="3 2"
+            />
+          </svg>
+          Parada en boxes
+        </span>
+      )}
     </div>
   )
 }
@@ -296,6 +314,7 @@ function LineChart({
   compact = false,
   label,
   bands = [],
+  pitStops = [],
   interactiveY = false,
   resetKey = "",
   xLabel = "Vuelta",
@@ -304,11 +323,13 @@ function LineChart({
   compact?: boolean
   label: string
   bands?: Band[]
+  pitStops?: PitStop[] // paradas en boxes: línea discontinua vertical con su recuadro
   xLabel?: string // nombre del eje X: "Vuelta" o "Vuelta del stint"
   interactiveY?: boolean // permite moverse y ampliar en el eje Y
   resetKey?: string // al cambiar, vuelve a mostrarse todo el rango
 }) {
   const [hover, setHover] = useState<{ s: number; p: number } | null>(null)
+  const [hoverPit, setHoverPit] = useState<number | null>(null)
   const [yView, setYView] = useState<YView | null>(null)
   const [dragging, setDragging] = useState(false)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -371,6 +392,12 @@ function LineChart({
   const sy = (y: number) => pad.top + (1 - (y - minY) / (maxY - minY)) * plotH
   const visible = (y: number) => y >= minY - 1e-9 && y <= maxY + 1e-9
 
+  // La línea de parada va entre la vuelta de entrada y la de salida; solo se
+  // dibujan las que caen dentro del rango del gráfico.
+  const pits = pitStops
+    .map((stop, index) => ({ stop, index, x: (stop.fromLap + stop.toLap) / 2 }))
+    .filter((p) => p.x >= minX && p.x <= maxX)
+
   const yTicks = niceTicks(minY, maxY, 5)
   const xTicks = niceTicks(minX, maxX, 8).filter(Number.isInteger)
 
@@ -406,6 +433,17 @@ function LineChart({
     ? {
         left: Math.min(88, Math.max(12, (sx(hovered.x) / width) * 100)),
         top: (sy(hovered.y) / height) * 100,
+      }
+    : null
+
+  const pitHover = hoverPit === null ? undefined : pitStops[hoverPit]
+  const pitTooltip = pitHover
+    ? {
+        left: Math.min(
+          88,
+          Math.max(12, (sx((pitHover.fromLap + pitHover.toLap) / 2) / width) * 100),
+        ),
+        top: ((pad.top + 6) / height) * 100,
       }
     : null
 
@@ -536,6 +574,24 @@ function LineChart({
             {xLabel.toLowerCase()}
           </text>
 
+          {pits.map(({ index, x }) => (
+            <g key={`pit-${index}`} aria-hidden="true">
+              <line
+                x1={sx(x)}
+                x2={sx(x)}
+                y1={pad.top}
+                y2={pad.top + plotH}
+                stroke={PIT_LINE_COLOR}
+                strokeWidth={hoverPit === index ? 2.4 : 1.5}
+                strokeOpacity={hoverPit === index ? 1 : 0.7}
+                strokeDasharray="5 4"
+              />
+              <text x={sx(x) + 4} y={pad.top + 11} fill="#9fb0c2" fontSize="10">
+                P{index + 1}
+              </text>
+            </g>
+          ))}
+
           <g clipPath={interactiveY ? `url(#${clipId})` : undefined}>
             {series.map(
               (s) =>
@@ -596,6 +652,23 @@ function LineChart({
             )}
           </g>
 
+          {pits.map(({ index, x }) => (
+            <rect
+              key={`pit-hit-${index}`}
+              x={sx(x) - 5}
+              y={pad.top}
+              width={10}
+              height={plotH}
+              fill="transparent"
+              style={{ cursor: "help" }}
+              onMouseEnter={() => {
+                setHoverPit(index)
+                setHover(null)
+              }}
+              onMouseLeave={() => setHoverPit(null)}
+            />
+          ))}
+
           {interactiveY && zoomed && (
             <g aria-hidden="true">
               <rect x={width - 11} y={pad.top} width={5} height={plotH} rx={2.5} fill="#182536" />
@@ -623,6 +696,27 @@ function LineChart({
             <span>{hovered.who}</span>
             {hovered.best && <em>Mejor vuelta de la serie</em>}
             {hovered.note && <em>{hovered.note}</em>}
+          </div>
+        )}
+
+        {pitHover && pitTooltip && (
+          <div
+            className="chart-tooltip below"
+            style={{ left: `${pitTooltip.left}%`, top: `${pitTooltip.top}%` }}
+          >
+            <b>
+              Parada P{(hoverPit ?? 0) + 1} · vueltas {pitHover.fromLap}–{pitHover.toLap}
+            </b>
+            <strong>{pitHover.pit.seconds === null ? "Sin tiempo" : pitHover.pit.text}</strong>
+            <em>Duración en boxes</em>
+            {pitHover.driverChange ? (
+              <>
+                <span>Sale: {pitHover.driverOut}</span>
+                <span>Entra: {pitHover.driverIn}</span>
+              </>
+            ) : (
+              <span>Sin relevo: sigue {pitHover.driverOut}</span>
+            )}
           </div>
         )}
       </div>
@@ -1378,6 +1472,8 @@ function Dashboard({
   // Barras de diferencia de ritmo: escala común a todos los pilotos, mínimo 0,6 s.
   const maxGap = drivers.reduce((max, d) => Math.max(max, d.medianGap.seconds ?? 0), 0)
   const scaleMax = Math.max(0.6, Math.ceil(maxGap * 10) / 10)
+  // Con "Superponer pilotos" el eje es la vuelta del stint y las paradas no tienen posición.
+  const pitStops = overlay ? [] : (car.data?.pitStops ?? [])
 
   return (
     <div className="app-shell dashboard-shell">
@@ -1646,13 +1742,20 @@ function Dashboard({
                         />
                         Superponer pilotos
                       </label>
-                      <Legend series={compareSeries} />
+                      <Legend series={compareSeries} pit={pitStops.length > 0} />
                       <LineChart
                         series={compareSeries}
+                        pitStops={pitStops}
                         xLabel={overlay ? "Vuelta del stint" : overall ? "Vuelta acumulada" : "Vuelta"}
                         label={`Tiempo por vuelta de los pilotos del coche ${car.data.car.number}${overlay ? ", superpuestos por vuelta del stint" : ""}`}
                       />
                     </div>
+                    {pitStops.length > 0 && (
+                      <p className="chart-note">
+                        Las líneas discontinuas verticales marcan las paradas en boxes. Pasa el
+                        ratón por encima para ver quién sale, quién entra y cuánto dura.
+                      </p>
+                    )}
                     {mode === "todas" && (
                       <p className="chart-note">
                         Las vueltas bajo bandera llevan el color y la forma de su bandera (la
@@ -1684,6 +1787,9 @@ function Dashboard({
                               Mejor vuelta {driver.best.text} ({driver.deltaText})
                             </small>
                             <small>
+                              Media de ritmo {driver.mean.text} · {driver.paceLaps} vueltas
+                            </small>
+                            <small>
                               S1 {driver.s1.text} · S2 {driver.s2.text} · S3 {driver.s3.text}
                             </small>
                           </div>
@@ -1707,8 +1813,9 @@ function Dashboard({
                     </p>
                     <p className="summary-note">
                       Vueltas de ritmo: {drivers.map((d) => `${d.name} ${d.paceLaps}`).join(" · ")}.
-                      El ritmo medio es la mediana de las vueltas de ritmo; menor tiempo indica
-                      mayor ritmo.
+                      La media es el promedio de esas vueltas, sin entradas ni salidas de boxes,
+                      sin vueltas bajo bandera y sin vueltas lentas. El valor grande y las barras
+                      usan la mediana, menos sensible a vueltas atípicas.
                     </p>
                   </div>
                 </div>

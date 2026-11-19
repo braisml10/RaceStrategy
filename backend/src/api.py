@@ -257,6 +257,34 @@ def _stints(car: pd.DataFrame) -> list[dict]:
     return stints
 
 
+def _pit_stops(car: pd.DataFrame) -> list[dict]:
+    """Paradas en boxes del coche: el paso de un stint al siguiente.
+
+    Sale el piloto del stint que termina y entra el del que empieza (si es el mismo,
+    no hay relevo). La duración es el tiempo en boxes de la vuelta de salida. Ni la
+    espera inicial del primer stint ni el cambio de una sesión a otra en "todas las
+    sesiones" cuentan como parada.
+    """
+    stints = stint_summary(car).sort_values("STINT")
+    session_of = car.set_index("LAP_NUMBER")["SESSION"]
+    stops: list[dict] = []
+    previous = None
+    for r in stints.itertuples():
+        if previous is not None and session_of[previous.END_LAP] == session_of[r.START_LAP]:
+            stops.append(
+                {
+                    "fromLap": int(previous.END_LAP),   # vuelta de entrada a boxes
+                    "toLap": int(r.START_LAP),          # vuelta de salida
+                    "driverOut": previous.DRIVER_NAME,
+                    "driverIn": r.DRIVER_NAME,
+                    "driverChange": bool(previous.DRIVER_NAME != r.DRIVER_NAME),
+                    "pit": _time(r.PIT_BEFORE_SECONDS),
+                }
+            )
+        previous = r
+    return stops
+
+
 def _pace_points(df: pd.DataFrame, car: str) -> list[dict]:
     laps = df[(df["NUMBER"] == car) & df["IS_PACE_LAP"]].sort_values("LAP_NUMBER")
     return [
@@ -394,7 +422,7 @@ def category_view(
 def car_view(
     session: str, number: str, slow: int = Query(DEFAULT_SLOW_PCT, ge=100, le=200)
 ) -> dict:
-    """Un coche: KPIs por piloto y todas sus vueltas (con su estado)."""
+    """Un coche: KPIs por piloto, paradas en boxes y todas sus vueltas (con su estado)."""
     df = _session_data(session, slow)
     car = df[df["NUMBER"] == number]
     if car.empty:
@@ -423,6 +451,7 @@ def car_view(
                 "s2": _time(r.BEST_S2),
                 "s3": _time(r.BEST_S3),
                 "median": _time(r.MEDIAN_PACE),
+                "mean": _time(r.MEAN_PACE),
                 "medianGap": {"seconds": _num(r.MEDIAN_GAP), "text": _median_gap_text(r.MEDIAN_GAP)},
                 "deltaText": (
                     "Referencia"
@@ -433,6 +462,7 @@ def car_view(
             for r in drivers.itertuples()
         ],
         "stints": _stints(car),
+        "pitStops": _pit_stops(car),
         "laps": [
             {
                 "lap": int(r.LAP_NUMBER),

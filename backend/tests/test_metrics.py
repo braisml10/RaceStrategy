@@ -1,6 +1,6 @@
 import pytest
 
-from helpers import STINT_CAR, car_rows, write_session
+from helpers import STINT_CAR, car_rows, pace, write_session
 from importer import import_data
 from laps import format_hms, mark_pace_laps
 from metrics import best_by_driver, driver_summary, pace_by_driver, ranking_by_metric, session_bests
@@ -67,3 +67,16 @@ def test_driver_summary_median_gap(tmp_path):
     assert summary.loc["Ben B", "MEDIAN_PACE"] == pytest.approx(94.2)
     assert summary.loc["Ben B", "MEDIAN_GAP"] == pytest.approx(0.0)      # el más rápido
     assert summary.loc["Ana A", "MEDIAN_GAP"] == pytest.approx(0.95)     # 95.15 - 94.2
+
+
+def test_mean_pace_excludes_non_pace_laps(tmp_path):
+    rows = car_rows("5", [
+        (120.0, "Ana A", None, False, "GF"),   # salida
+        pace(94.0, "Ana A"), pace(95.0, "Ana A"), pace(99.0, "Ana A"),
+        (95.2, "Ana A", None, False, "FCY"),   # bajo bandera: no cuenta
+        (130.0, "Ana A", None, True, "GF"),    # entrada a boxes: no cuenta
+    ])
+    summary = driver_summary(mark_pace_laps(import_data(write_session(tmp_path / "m.csv", rows))))
+    ana = summary.set_index("DRIVER_NAME").loc["Ana A"]
+    assert ana["MEAN_PACE"] == pytest.approx(96.0)     # (94 + 95 + 99) / 3
+    assert ana["MEDIAN_PACE"] == pytest.approx(95.0)   # distinta de la media

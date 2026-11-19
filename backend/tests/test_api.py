@@ -107,6 +107,21 @@ def test_car_stints_and_trend(client, tmp_path):
     assert stints[1]["median"]["text"] == "01:34.300"
 
 
+def test_car_pit_stops(client, tmp_path):
+    body = client.get("/api/sessions/FP1.csv/cars/007").json()
+    [stop] = body["pitStops"]
+    assert (stop["fromLap"], stop["toLap"]) == (4, 5)
+    assert (stop["driverOut"], stop["driverIn"], stop["driverChange"]) == ("Ana A", "Ben B", True)
+    assert stop["pit"]["seconds"] is not None
+    assert body["drivers"][0]["mean"]["seconds"] == pytest.approx(94.5)
+
+    write_session(tmp_path / "STINT.csv", car_rows("5", STINT_CAR))
+    stops = client.get("/api/sessions/STINT.csv/cars/5").json()["pitStops"]
+    assert [(s["fromLap"], s["toLap"]) for s in stops] == [(6, 7), (12, 13)]
+    assert stops[0]["pit"]["seconds"] == pytest.approx(65.0)   # la espera inicial no cuenta
+    assert stops[0]["driverIn"] == "Ben B"
+
+
 def test_shared_number_is_separated_not_rejected(client, tmp_path):
     # El mismo FP1 pero "guardado con Excel": 007 -> 7, igual que el Toyota
     lost = [r.replace("007;", "7;", 1) if r.startswith("007;") else r for r in SESSION_ROWS]
@@ -174,6 +189,7 @@ def test_overall_laps_are_accumulated_per_car(client, tmp_path):
     ]
     # la primera vuelta de cada sesión es de salida: arranca un stint nuevo
     assert [(s["stint"], s["startLap"], s["endLap"]) for s in car["stints"]] == [(1, 1, 2), (2, 3, 5)]
+    assert car["pitStops"] == []                    # el salto de FP1 a FP2 no es una parada
     pace = client.get("/api/sessions/__all__/categories/HYPERCAR").json()["pace"][0]
     assert [(p["lap"], p["session"], p["sessionLap"]) for p in pace["laps"]] == [
         (2, "FP1", 2), (4, "FP2", 2), (5, "FP2", 3),

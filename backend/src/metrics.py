@@ -40,16 +40,22 @@ def best_by_driver(car_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def driver_summary(car_df: pd.DataFrame) -> pd.DataFrame:
-    """`best_by_driver` más el ritmo real (mediana, su diferencia con el más rápido
-    y nº de vueltas de ritmo).
+    """`best_by_driver` más el ritmo real (mediana, media, la diferencia de la
+    mediana con el piloto más rápido y nº de vueltas de ritmo).
 
+    MEAN_PACE es la media de las vueltas de ritmo: sin entradas ni salidas de
+    boxes, sin vueltas bajo bandera y sin vueltas lentas.
     `car_df` viene de `mark_pace_laps` y contiene un único coche.
     """
     best = best_by_driver(car_df)
     pace = (
         car_df[car_df["IS_PACE_LAP"]]
         .groupby("DRIVER_NAME")
-        .agg(PACE_LAPS=("LAP_NUMBER", "count"), MEDIAN_PACE=("LAP_TIME_SECONDS", "median"))
+        .agg(
+            PACE_LAPS=("LAP_NUMBER", "count"),
+            MEDIAN_PACE=("LAP_TIME_SECONDS", "median"),
+            MEAN_PACE=("LAP_TIME_SECONDS", "mean"),
+        )
     )
     summary = best.merge(pace, how="left", left_on="DRIVER_NAME", right_index=True)
     summary["PACE_LAPS"] = summary["PACE_LAPS"].fillna(0).astype(int)

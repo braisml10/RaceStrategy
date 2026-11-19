@@ -99,6 +99,7 @@ export type DriverRow = {
   s2: TimeValue
   s3: TimeValue
   median: TimeValue
+  mean: TimeValue // media de las vueltas de ritmo (sin boxes, banderas ni lentas)
   medianGap: TimeValue
   deltaText: string
 }
@@ -130,11 +131,20 @@ export type StintRow = {
   // tiempo ≈ intercept + slope × (vuelta del stint); null si hay pocas vueltas de ritmo
   trend: { slope: number; intercept: number; r2: number | null } | null
 }
+export type PitStop = {
+  fromLap: number // vuelta de entrada a boxes
+  toLap: number // vuelta de salida
+  driverOut: string // piloto que sale del coche
+  driverIn: string // piloto que entra
+  driverChange: boolean
+  pit: TimeValue // tiempo en boxes
+}
 export type CarData = {
   car: { number: string; team: string; manufacturer: string; category: string }
   counts: { laps: number; paceLaps: number }
   drivers: DriverRow[]
   stints: StintRow[]
+  pitStops: PitStop[]
   laps: CarLap[]
 }
 
