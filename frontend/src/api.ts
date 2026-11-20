@@ -100,6 +100,7 @@ export type DriverRow = {
   s3: TimeValue
   median: TimeValue
   mean: TimeValue // media de las vueltas de ritmo (sin boxes, banderas ni lentas)
+  meanGap: TimeValue // diferencia de la media con la del piloto más rápido del coche
   medianGap: TimeValue
   deltaText: string
 }
@@ -139,12 +140,16 @@ export type PitStop = {
   driverChange: boolean
   pit: TimeValue // tiempo en boxes
 }
+// Paradas de un mismo tipo: nº con tiempo registrado, media, mejor y peor.
+export type PitGroup = { count: number; mean: TimeValue; best: TimeValue; worst: TimeValue }
+export type PitSummary = { withChange: PitGroup; withoutChange: PitGroup }
 export type CarData = {
   car: { number: string; team: string; manufacturer: string; category: string }
   counts: { laps: number; paceLaps: number }
   drivers: DriverRow[]
   stints: StintRow[]
   pitStops: PitStop[]
+  pitSummary: PitSummary
   laps: CarLap[]
 }
 
@@ -216,8 +221,19 @@ export const api = {
     get<CategoryData>(
       `/api/sessions/${encPath(session)}/categories/${enc(category)}?slow=${slow}`,
     ),
-  car: (session: string, number: string, slow: number) =>
-    get<CarData>(`/api/sessions/${encPath(session)}/cars/${enc(number)}?slow=${slow}`),
+  car: async (session: string, number: string, slow: number) => {
+    const data = await get<CarData>(
+      `/api/sessions/${encPath(session)}/cars/${enc(number)}?slow=${slow}`,
+    )
+    // Un backend sin reiniciar responde sin los campos nuevos y la pantalla se rompería.
+    if (!data.pitSummary || !data.pitStops || data.drivers.some((d) => !d.meanGap || !d.mean)) {
+      throw new Error(
+        "El backend está desactualizado (faltan pitSummary, pitStops o meanGap). " +
+          "Reinícialo y comprueba que api.py y metrics.py son los últimos.",
+      )
+    }
+    return data
+  },
 }
 
 // ---------------------------------------------------------------------------

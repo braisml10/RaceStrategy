@@ -976,3 +976,43 @@ summary:focus-visible,
 /* ---- Evento + sesión ---- */
 .select-group { display: flex; flex-wrap: wrap; gap: 16px; margin: -14px 0 24px; }
 .select-group .session-select { margin: 0; }
+/* ---- Ritmo medio por piloto: ritmo medio y vuelta rápida destacados ---- */
+.pace-row { grid-template-columns: 4px 1fr; }
+.pace-stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.pace-stat {
+  background: #0e1721;
+  border: 1px solid #1b2a3a;
+  border-left: 3px solid #2f80ff;
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.pace-stat-label { display: block; color: #8fa3b8; font: 700 9px 'Space Mono', monospace; letter-spacing: 0.1em; }
+.pace-stat span { display: block; font: 400 22px 'Space Mono', monospace; letter-spacing: -0.03em; margin: 6px 0 4px; }
+.pace-stat small:last-child { display: block; color: #8fa3b8; font: 400 11px 'Space Mono', monospace; }
+
+/* ---- Análisis de pit stop ---- */
+.pit-section { margin-top: 34px; }
+.pit-metrics { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 680px) {
+  .pit-metrics { grid-template-columns: 1fr; }
+}
+/* ---- Ritmo por vuelta a todo el ancho, pilotos en fila debajo ---- */
+.driver-content { grid-template-columns: 1fr; }
+.driver-chart { border-right: 0; border-bottom: 1px solid #1a2938; }
+.pace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+.pace-grid .pace-row {
+  border: 1px solid #182636;
+  border-radius: 5px;
+  padding: 14px;
+  background: #0b131c;
+}

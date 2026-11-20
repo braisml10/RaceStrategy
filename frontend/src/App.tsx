@@ -1,15 +1,16 @@
 import {
+  Component,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react"
 import {
   api,
   formatLapTime,
-  formatSeconds,
   formatSigned,
   setMsSeparator,
   timeFormatLabel,
@@ -18,6 +19,7 @@ import {
   type CategoryData,
   type Metric,
   type Overview,
+  type PitGroup,
   type PitStop,
   type RankingRow,
   type SessionInfo,
@@ -318,8 +320,10 @@ function LineChart({
   interactiveY = false,
   resetKey = "",
   xLabel = "Vuelta",
+  wide = false,
 }: {
   series: Series[]
+  wide?: boolean // gráfica a todo el ancho de la tarjeta: más ancha y con más marcas en X
   compact?: boolean
   label: string
   bands?: Band[]
@@ -367,8 +371,8 @@ function LineChart({
     return <p className="chart-empty">No hay vueltas que mostrar con los filtros actuales.</p>
   }
 
-  const width = 620
-  const height = compact ? 230 : 290
+  const width = wide ? 900 : 620
+  const height = compact ? 230 : wide ? 320 : 290
   const pad = { left: 74, right: 18, top: 14, bottom: 30 }
   const plotW = width - pad.left - pad.right
   const plotH = height - pad.top - pad.bottom
@@ -399,7 +403,7 @@ function LineChart({
     .filter((p) => p.x >= minX && p.x <= maxX)
 
   const yTicks = niceTicks(minY, maxY, 5)
-  const xTicks = niceTicks(minX, maxX, 8).filter(Number.isInteger)
+  const xTicks = niceTicks(minX, maxX, wide ? 14 : 8).filter(Number.isInteger)
 
   const zoomBy = (factor: number) =>
     setYView(zoomView(view, full, factor, (view.min + view.max) / 2))
@@ -1348,6 +1352,87 @@ function StintPanel({ data, overall }: { data: CarData; overall: boolean }) {
   )
 }
 
+// Análisis de las paradas en boxes de un coche: tiempo medio con y sin cambio de piloto.
+function PitPanel({ data }: { data: CarData }) {
+  const { pitSummary: summary, pitStops: stops } = data
+
+  const card = (label: string, group: PitGroup, accent?: boolean) => (
+    <MetricCard
+      label={label}
+      value={group.count ? group.mean.text : "–"}
+      note={
+        group.count === 0
+          ? "Sin paradas de este tipo"
+          : `${group.count} ${group.count === 1 ? "parada" : "paradas"} · tiempo medio`
+      }
+      detail={group.count ? `Mejor ${group.best.text} · Peor ${group.worst.text}` : "—"}
+      accent={accent}
+    />
+  )
+
+  return (
+    <section className="pit-section" id="pit">
+      <div className="section-title">
+        <div>
+          <div className="eyebrow">
+            <span /> ESTRATEGIA
+          </div>
+          <h2>Análisis de pit stop</h2>
+          <p>Tiempo en boxes de las paradas del coche #{data.car.number}, según haya o no relevo.</p>
+        </div>
+      </div>
+
+      <div className="metrics-grid pit-metrics">
+        {card("Parada con cambio de piloto", summary.withChange, true)}
+        {card("Parada sin cambio de piloto", summary.withoutChange)}
+      </div>
+
+      <article className="panel">
+        <div className="stint-body">
+          {stops.length === 0 ? (
+            <p className="chart-empty">Este coche no ha hecho paradas en los datos cargados.</p>
+          ) : (
+            <div className="table-scroll stint-table">
+              <table>
+                <caption className="sr-only">Paradas en boxes del coche {data.car.number}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Parada</th>
+                    <th scope="col">Vueltas</th>
+                    <th scope="col">Tipo</th>
+                    <th scope="col">Sale</th>
+                    <th scope="col">Entra</th>
+                    <th scope="col">Tiempo en boxes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stops.map((s, i) => (
+                    <tr key={`${s.fromLap}-${s.toLap}`}>
+                      <td>P{i + 1}</td>
+                      <td>
+                        {s.fromLap}→{s.toLap}
+                      </td>
+                      <td>{s.driverChange ? "Cambio de piloto" : "Sin cambio"}</td>
+                      <td>{s.driverOut}</td>
+                      <td>{s.driverChange ? s.driverIn : "—"}</td>
+                      <td>{s.pit.text}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="chart-note">
+            El tiempo es el que registra el cronometraje en boxes en la vuelta de salida. No incluye
+            la espera inicial antes del primer stint ni el paso de una sesión a otra en «Todas las
+            sesiones». Las paradas sin tiempo registrado no entran en la media.
+          </p>
+        </div>
+      </article>
+    </section>
+  )
+}
+
 function Dashboard({
   sessionId,
   sessionName,
@@ -1463,14 +1548,8 @@ function Dashboard({
   }
 
   const drivers = car.data?.drivers ?? []
-  const fastest = drivers.reduce<number | null>(
-    (best, d) =>
-      d.best.seconds !== null && (best === null || d.best.seconds < best) ? d.best.seconds : best,
-    null,
-  )
-  const leader = drivers.find((d) => d.best.seconds === fastest)
-  // Barras de diferencia de ritmo: escala común a todos los pilotos, mínimo 0,6 s.
-  const maxGap = drivers.reduce((max, d) => Math.max(max, d.medianGap.seconds ?? 0), 0)
+  // Barras de diferencia de ritmo medio: escala común a todos los pilotos, mínimo 0,6 s.
+  const maxGap = drivers.reduce((max, d) => Math.max(max, d.meanGap.seconds ?? 0), 0)
   const scaleMax = Math.max(0.6, Math.ceil(maxGap * 10) / 10)
   // Con "Superponer pilotos" el eje es la vuelta del stint y las paradas no tienen posición.
   const pitStops = overlay ? [] : (car.data?.pitStops ?? [])
@@ -1744,18 +1823,13 @@ function Dashboard({
                       </label>
                       <Legend series={compareSeries} pit={pitStops.length > 0} />
                       <LineChart
+                        wide
                         series={compareSeries}
                         pitStops={pitStops}
                         xLabel={overlay ? "Vuelta del stint" : overall ? "Vuelta acumulada" : "Vuelta"}
                         label={`Tiempo por vuelta de los pilotos del coche ${car.data.car.number}${overlay ? ", superpuestos por vuelta del stint" : ""}`}
                       />
                     </div>
-                    {pitStops.length > 0 && (
-                      <p className="chart-note">
-                        Las líneas discontinuas verticales marcan las paradas en boxes. Pasa el
-                        ratón por encima para ver quién sale, quién entra y cuánto dura.
-                      </p>
-                    )}
                     {mode === "todas" && (
                       <p className="chart-note">
                         Las vueltas bajo bandera llevan el color y la forma de su bandera (la
@@ -1763,11 +1837,13 @@ function Dashboard({
                         las de boxes y las cruces grises, las lentas sin bandera.
                       </p>
                     )}
-                    <p className="chart-note">
-                      {overlay
-                        ? "Cada stint empieza en la vuelta 1 (salida de boxes) para ver los ritmos de los pilotos unos encima de otros. Si un piloto tiene varios stints, se distinguen por el trazo. El círculo blanco marca la mejor vuelta de cada piloto."
-                        : "El círculo blanco marca la mejor vuelta de cada piloto."}
-                    </p>
+                    {overlay && (
+                      <p className="chart-note">
+                        Cada stint empieza en la vuelta 1 (salida de boxes) para ver los ritmos de
+                        los pilotos unos encima de otros. Si un piloto tiene varios stints, se
+                        distinguen por el trazo.
+                      </p>
+                    )}
                   </div>
 
                   <div className="driver-summary">
@@ -1775,27 +1851,33 @@ function Dashboard({
                       <h3>Ritmo medio por piloto</h3>
                       <span>Δ al más rápido</span>
                     </div>
+                    <div className="pace-grid">
                     {drivers.map((driver, index) => {
                       const color = DRIVER_PALETTE[index % DRIVER_PALETTE.length]
-                      const gap = driver.medianGap.seconds
+                      const gap = driver.meanGap.seconds
                       return (
                         <div className="pace-row" key={driver.name}>
                           <span className="pace-swatch" style={{ background: color }} />
                           <div className="pace-name">
                             <strong>{driver.name}</strong>
                             <small>
-                              Mejor vuelta {driver.best.text} ({driver.deltaText})
-                            </small>
-                            <small>
-                              Media de ritmo {driver.mean.text} · {driver.paceLaps} vueltas
+                              {driver.paceLaps} vueltas de ritmo · Mediana {driver.median.text}
                             </small>
                             <small>
                               S1 {driver.s1.text} · S2 {driver.s2.text} · S3 {driver.s3.text}
                             </small>
                           </div>
-                          <div className="pace-value">
-                            <span style={{ color }}>{driver.median.text}</span>
-                            <small>{driver.medianGap.text}</small>
+                          <div className="pace-stats">
+                            <div className="pace-stat" style={{ borderLeftColor: color }}>
+                              <small className="pace-stat-label">RITMO MEDIO</small>
+                              <span style={{ color }}>{driver.mean.text}</span>
+                              <small>{driver.meanGap.text}</small>
+                            </div>
+                            <div className="pace-stat">
+                              <small className="pace-stat-label">VUELTA RÁPIDA</small>
+                              <span>{driver.best.text}</span>
+                              <small>{driver.deltaText}</small>
+                            </div>
                           </div>
                           <div className="pace-track" aria-hidden="true">
                             <i
@@ -1808,27 +1890,9 @@ function Dashboard({
                         </div>
                       )
                     })}
-                    <p className="summary-note">
-                      Barras: diferencia de tiempo · escala común 0–{formatSeconds(scaleMax)} s
-                    </p>
-                    <p className="summary-note">
-                      Vueltas de ritmo: {drivers.map((d) => `${d.name} ${d.paceLaps}`).join(" · ")}.
-                      La media es el promedio de esas vueltas, sin entradas ni salidas de boxes,
-                      sin vueltas bajo bandera y sin vueltas lentas. El valor grande y las barras
-                      usan la mediana, menos sensible a vueltas atípicas.
-                    </p>
+                    </div>
                   </div>
                 </div>
-
-                {leader && (
-                  <div className="driver-insight">
-                    <span>↗</span>
-                    <p>
-                      <strong>{leader.name}</strong> marca la mejor vuelta del coche (
-                      {leader.best.text}) con una mediana de ritmo de {leader.median.text}.
-                    </p>
-                  </div>
-                )}
 
                 <details className="lap-table">
                   <summary>Ver todas las vueltas del coche como tabla</summary>
@@ -1870,11 +1934,49 @@ function Dashboard({
           </article>
         </section>
 
+        {car.data && <PitPanel key={`pit-${car.data.car.number}`} data={car.data} />}
         {car.data && <StintPanel key={car.data.car.number} data={car.data} overall={overall} />}
       </main>
       <Footer sessionName={sessionName} eventName={eventName} />
     </div>
   )
+}
+
+// Si algo falla al dibujar el análisis, se muestra el error en vez de una pantalla en negro.
+class ErrorBoundary extends Component<
+  { children: ReactNode; onReset: () => void },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    const { error } = this.state
+    if (!error) return this.props.children
+    return (
+      <div className="app-shell">
+        <Header />
+        <main className="status" role="alert">
+          <h1>Algo ha fallado al mostrar el análisis</h1>
+          <p>{error.message}</p>
+          <button
+            className="primary-button"
+            style={{ maxWidth: 220 }}
+            onClick={() => {
+              this.setState({ error: null })
+              this.props.onReset()
+            }}
+          >
+            Volver al inicio
+          </button>
+        </main>
+        <Footer />
+      </div>
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1928,19 +2030,21 @@ export default function App() {
   }
 
   return (
-    <Dashboard
-      sessionId={sessionId}
-      sessionName={overview.data.session.name}
-      eventName={overview.data.session.eventName}
-      sessions={boot.data.sessions}
-      onSession={setSessionId}
-      slow={slow}
-      onSlow={setSlow}
-      category={category}
-      categories={overview.data.categories}
-      overall={overview.data.overall}
-      onCategory={setCategory}
-      onHome={() => setCategory(null)}
-    />
+    <ErrorBoundary key={`${sessionId}|${category}`} onReset={() => setCategory(null)}>
+      <Dashboard
+        sessionId={sessionId}
+        sessionName={overview.data.session.name}
+        eventName={overview.data.session.eventName}
+        sessions={boot.data.sessions}
+        onSession={setSessionId}
+        slow={slow}
+        onSlow={setSlow}
+        category={category}
+        categories={overview.data.categories}
+        overall={overview.data.overall}
+        onCategory={setCategory}
+        onHome={() => setCategory(null)}
+      />
+    </ErrorBoundary>
   )
 }

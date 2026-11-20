@@ -75,8 +75,14 @@ def test_mean_pace_excludes_non_pace_laps(tmp_path):
         pace(94.0, "Ana A"), pace(95.0, "Ana A"), pace(99.0, "Ana A"),
         (95.2, "Ana A", None, False, "FCY"),   # bajo bandera: no cuenta
         (130.0, "Ana A", None, True, "GF"),    # entrada a boxes: no cuenta
+        (130.0, "Ben B", 40.0, False, "GF"),   # salida de boxes de Ben: no cuenta
+        pace(97.0, "Ben B"), pace(98.0, "Ben B"),
     ])
     summary = driver_summary(mark_pace_laps(import_data(write_session(tmp_path / "m.csv", rows))))
-    ana = summary.set_index("DRIVER_NAME").loc["Ana A"]
+    drivers = summary.set_index("DRIVER_NAME")
+    ana, ben = drivers.loc["Ana A"], drivers.loc["Ben B"]
     assert ana["MEAN_PACE"] == pytest.approx(96.0)     # (94 + 95 + 99) / 3
     assert ana["MEDIAN_PACE"] == pytest.approx(95.0)   # distinta de la media
+    assert ben["MEAN_PACE"] == pytest.approx(97.5)
+    assert ana["MEAN_GAP"] == pytest.approx(0.0)       # el de mejor media es la referencia
+    assert ben["MEAN_GAP"] == pytest.approx(1.5)

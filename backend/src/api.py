@@ -285,6 +285,28 @@ def _pit_stops(car: pd.DataFrame) -> list[dict]:
     return stops
 
 
+def _pit_group(stops: list[dict]) -> dict:
+    """Nº de paradas con tiempo, media, mejor y peor. Las paradas sin tiempo registrado
+    no entran en la media."""
+    times = [s["pit"]["seconds"] for s in stops if s["pit"]["seconds"] is not None]
+    if not times:
+        return {"count": 0, "mean": _time(None), "best": _time(None), "worst": _time(None)}
+    return {
+        "count": len(times),
+        "mean": _time(sum(times) / len(times)),
+        "best": _time(min(times)),
+        "worst": _time(max(times)),
+    }
+
+
+def _pit_summary(stops: list[dict]) -> dict:
+    """Tiempo de parada con cambio de piloto y sin él."""
+    return {
+        "withChange": _pit_group([s for s in stops if s["driverChange"]]),
+        "withoutChange": _pit_group([s for s in stops if not s["driverChange"]]),
+    }
+
+
 def _pace_points(df: pd.DataFrame, car: str) -> list[dict]:
     laps = df[(df["NUMBER"] == car) & df["IS_PACE_LAP"]].sort_values("LAP_NUMBER")
     return [
@@ -432,6 +454,7 @@ def car_view(
     drivers = driver_summary(car)
     fastest = drivers["BEST_LAP"].min()
     series = lap_series(car)
+    stops = _pit_stops(car)
 
     return {
         "car": {
@@ -452,6 +475,7 @@ def car_view(
                 "s3": _time(r.BEST_S3),
                 "median": _time(r.MEDIAN_PACE),
                 "mean": _time(r.MEAN_PACE),
+                "meanGap": {"seconds": _num(r.MEAN_GAP), "text": _median_gap_text(r.MEAN_GAP)},
                 "medianGap": {"seconds": _num(r.MEDIAN_GAP), "text": _median_gap_text(r.MEDIAN_GAP)},
                 "deltaText": (
                     "Referencia"
@@ -462,7 +486,8 @@ def car_view(
             for r in drivers.itertuples()
         ],
         "stints": _stints(car),
-        "pitStops": _pit_stops(car),
+        "pitStops": stops,
+        "pitSummary": _pit_summary(stops),
         "laps": [
             {
                 "lap": int(r.LAP_NUMBER),

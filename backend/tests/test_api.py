@@ -122,6 +122,41 @@ def test_car_pit_stops(client, tmp_path):
     assert stops[0]["driverIn"] == "Ben B"
 
 
+def test_car_pit_summary(client, tmp_path):
+    # FP1 #007: una sola parada, con relevo Ana -> Ben
+    body = client.get("/api/sessions/FP1.csv/cars/007").json()
+    summary = body["pitSummary"]
+    assert summary["withChange"]["count"] == 1
+    assert summary["withChange"]["mean"]["seconds"] == body["pitStops"][0]["pit"]["seconds"]
+    assert summary["withoutChange"]["count"] == 0
+    assert summary["withoutChange"]["mean"] == {"seconds": None, "text": "–"}
+    assert [d["meanGap"] for d in body["drivers"]] == [
+        {"seconds": 0.0, "text": "Referencia"}, {"seconds": 0.0, "text": "Referencia"},
+    ]
+
+    # una parada sin relevo (30 s, sigue Ana) y otra con relevo (50 s, entra Ben)
+    pace = lambda s, d: (s, d, None, False, "GF")  # noqa: E731
+    write_session(tmp_path / "PIT.csv", car_rows("5", [
+        (120.0, "Ana A", None, False, "GF"),
+        pace(94.0, "Ana A"), pace(94.1, "Ana A"),
+        (110.0, "Ana A", None, True, "GF"),     # 4: entrada
+        (125.0, "Ana A", 30.0, False, "GF"),    # 5: salida, mismo piloto
+        pace(94.2, "Ana A"),
+        (111.0, "Ana A", None, True, "GF"),     # 7: entrada
+        (140.0, "Ben B", 50.0, False, "GF"),    # 8: salida, entra Ben
+        pace(94.3, "Ben B"),
+    ]))
+    body = client.get("/api/sessions/PIT.csv/cars/5").json()
+    assert [(s["fromLap"], s["toLap"], s["driverChange"]) for s in body["pitStops"]] == [
+        (4, 5, False), (7, 8, True),
+    ]
+    summary = body["pitSummary"]
+    assert summary["withoutChange"]["count"] == 1
+    assert summary["withoutChange"]["mean"]["seconds"] == pytest.approx(30.0)
+    assert summary["withChange"]["mean"]["seconds"] == pytest.approx(50.0)
+    assert summary["withChange"]["best"]["seconds"] == pytest.approx(50.0)
+
+
 def test_shared_number_is_separated_not_rejected(client, tmp_path):
     # El mismo FP1 pero "guardado con Excel": 007 -> 7, igual que el Toyota
     lost = [r.replace("007;", "7;", 1) if r.startswith("007;") else r for r in SESSION_ROWS]
